@@ -1,0 +1,372 @@
+// IEO tests. Sales are deployed with a zero duration, so bids are accepted
+// and the sale can be finalized in the same block.
+
+use ingot::ieo::{
+    Ieo,
+    IeoMsg,
+    MODE_BID,
+    MODE_SLOT,
+    STATE_FAILED,
+    STATE_SETTLING,
+    STATE_SUCCESS,
+    IEO_TOKENS,
+    RATE,
+    TARGET,
+    TOKENS_PER_SLOT,
+    bid_allocation,
+    slot_cost,
+}
+use std::evm::{ether, wei}
+
+const DEV: u256 = 0xde5
+const BIG: u256 = 1_000_000_000_000_000_000_000_000
+// 1M ether
+
+/// A stand-in buyer: holds BNB, bids through the IEO and has no receive
+/// function, so pushed refunds to it fail and fall back to claimRefund.
+msg BuyerMsg {
+    #[selector = 0x10]
+    DoBid { ieo: Address, amount: u256 } -> u256,
+    #[selector = 0x11]
+    DoSlots { ieo: Address, count: u256, cost: u256 } -> u256,
+    #[selector = 0x12]
+    DoClaim { ieo: Address, to: Address } -> Wei,
+}
+
+pub contract Buyer uses (call: mut Call) {
+    #[payable]
+    init()
+    {}
+
+    recv BuyerMsg {
+        DoBid { ieo, amount } -> u256 uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 200000,
+                value: wei(amount),
+                message: IeoMsg::Bid {},
+            )
+        }
+        DoSlots { ieo, count, cost } -> u256 uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 300000,
+                value: wei(cost),
+                message: IeoMsg::BuySlots { count },
+            )
+        }
+        DoClaim { ieo, to } -> Wei uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 100000,
+                value: Wei::zero(),
+                message: IeoMsg::ClaimRefund { to },
+            )
+        }
+    }
+}
+
+fn sale(_ mode: u8) -> Address uses (evm: mut Evm) {
+    evm.create2<Ieo>(
+        value: Wei::zero(),
+        args: (mode, Duration::zero(), Address::new(DEV)),
+        salt: 0,
+    )
+}
+
+fn buyer(_ salt: u256, _ fund: Wei) -> Address uses (evm: mut Evm) {
+    evm.create2<Buyer>(value: fund, args: (), salt: salt + 100)
+}
+
+fn bid_via(_ b: Address, _ ieo: Address, _ amount: u256) uses (evm: mut Evm) {
+    let _: u256 = evm
+        .call(
+            addr: b,
+            gas: 400000,
+            value: Wei::zero(),
+            message: BuyerMsg::DoBid { ieo, amount },
+        )
+}
+
+fn finalize(_ ieo: Address) -> u8 uses (evm: mut Evm) {
+    evm.call(
+        addr: ieo,
+        gas: 100000,
+        value: Wei::zero(),
+        message: IeoMsg::Finalize {},
+    )
+}
+
+fn settle_all(_ ieo: Address) uses (evm: mut Evm) {
+    var left: u256 = 1
+    while left > 0 {
+        let _: u256 = evm
+            .call(
+                addr: ieo,
+                gas: 20000000,
+                value: Wei::zero(),
+                message: IeoMsg::Settle { max: 50 },
+            )
+        let n: u256 = evm
+            .call(
+                addr: ieo,
+                gas: 100000,
+                value: Wei::zero(),
+                message: IeoMsg::Participants {},
+            )
+        let done: u256 = evm
+            .call(
+                addr: ieo,
+                gas: 100000,
+                value: Wei::zero(),
+                message: IeoMsg::SettledCount {},
+            )
+        left = n - done
+    }
+}
+
+#[test]
+fn slot_curve_sums_to_about_400_bnb() {
+    assert!(slot_cost(sold: 0, count: 1) == 5_500_000_000_000_000)
+    assert!(slot_cost(sold: 1, count: 1) == 5_500_100_000_000_000)
+    // 50,000 slots: 275 BNB base + 124.9975 BNB of steps.
+    assert!(
+        slot_cost(sold: 0, count: 50_000) == 399_997_500_000_000_000_000,
+    )
+    // Buying in two parts costs the same as buying at once.
+    assert!(
+        slot_cost(sold: 0, count: 10) + slot_cost(sold: 10, count: 5)
+            == slot_cost(sold: 0, count: 15),
+    )
+}
+
+#[test]
+fn sqrt_weighting_squeezes_whales() {
+    // Oversubscribed book: a 2 BNB whale and a 0.01 BNB minnow.
+    let total = TARGET * 2
+    let sqrt_sum: u256 = 100_000_000_000_000 // large enough that neither bid hits its cap
+    let whale = bid_allocation(bid: ether(2).as_wei(), total_in: total, sqrt_sum)
+    let minnow = bid_allocation(bid: 10_000_000_000_000_000, total_in: total, sqrt_sum)
+    // 200x the money buys about 14x the tokens (sqrt(200) = 14.14).
+    assert!(whale / minnow == 14)
+    // Under the target everyone is filled at the flat rate.
+    assert!(
+        bid_allocation(bid: ether(1).as_wei(), total_in: TARGET, sqrt_sum)
+            == ether(1).as_wei() * RATE,
+    )
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000_000)]
+fn bid_below_minimum_reverts() uses (evm: mut Evm) {
+    let ieo = sale(MODE_BID)
+    let _: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 200000,
+            value: wei(1_000_000_000_000_000),
+            message: IeoMsg::Bid {},
+        )
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000_000)]
+fn bid_above_cap_reverts() uses (evm: mut Evm) {
+    let ieo = sale(MODE_BID)
+    let _: u256 = evm.call(
+            addr: ieo,
+            gas: 200000,
+            value: ether(2),
+            message: IeoMsg::Bid {},
+        )
+    let _: u256 = evm.call(
+            addr: ieo,
+            gas: 200000,
+            value: wei(1),
+            message: IeoMsg::Bid {},
+        )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn failed_bid_sale_refunds_90_percent() uses (evm: mut Evm) {
+    let ieo = sale(MODE_BID)
+    let b = buyer(1, ether(1))
+    bid_via(b, ieo, ether(1).as_wei())
+    assert!(finalize(ieo) == STATE_FAILED)
+    settle_all(ieo)
+
+    // The push to the buyer contract fails, so the refund waits as a pull.
+    let pending: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::PendingRefund { who: b },
+        )
+    assert!(pending == 900_000_000_000_000_000)
+    let payee = Address::new(0x1234)
+    let _: Wei = evm
+        .call(
+            addr: b,
+            gas: 300000,
+            value: Wei::zero(),
+            message: BuyerMsg::DoClaim { ieo, to: payee },
+        )
+    assert!(evm.balance(payee) == wei(900_000_000_000_000_000))
+
+    let dev: Wei = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::ClaimDevOnFailure {},
+        )
+    assert!(dev == wei(100_000_000_000_000_000))
+    assert!(
+        evm.balance(Address::new(DEV)) == wei(100_000_000_000_000_000),
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn half_sold_bid_sale_succeeds_at_flat_rate() uses (evm: mut Evm) {
+    let ieo = sale(MODE_BID)
+    var i: u256 = 0
+    while i < 100 {
+        let b = buyer(i, ether(2))
+        bid_via(b, ieo, ether(2).as_wei())
+        i += 1
+    }
+    assert!(finalize(ieo) == STATE_SETTLING)
+    settle_all(ieo)
+    let state: u8 = evm.call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::State {},
+        )
+    assert!(state == STATE_SUCCESS)
+    let raised: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::Raised {},
+        )
+    assert!(raised == ether(200).as_wei())
+    let sold: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::SoldTokens {},
+        )
+    assert!(sold == IEO_TOKENS / 2)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn oversubscribed_bid_sale_never_oversells() uses (evm: mut Evm) {
+    let ieo = sale(MODE_BID)
+    let minnow = buyer(999, ether(1))
+    bid_via(minnow, ieo, 10_000_000_000_000_000)
+    let whale = buyer(0, ether(2))
+    bid_via(whale, ieo, ether(2).as_wei())
+    var i: u256 = 1
+    while i < 210 {
+        let b = buyer(i, ether(2))
+        bid_via(b, ieo, ether(2).as_wei())
+        i += 1
+    }
+    assert!(finalize(ieo) == STATE_SETTLING)
+    settle_all(ieo)
+
+    let sold: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::SoldTokens {},
+        )
+    assert!(sold <= IEO_TOKENS)
+    let raised: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::Raised {},
+        )
+    assert!(raised <= TARGET)
+    // The minnow is filled in full and refunded nothing.
+    let small: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::Allocation { who: minnow },
+        )
+    assert!(small == 10_000_000_000_000_000 * RATE)
+    // A whale pays for less than it bid and the rest waits as a refund.
+    let whale_paid: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::Paid { who: whale },
+        )
+    let whale_refund: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::PendingRefund { who: whale },
+        )
+    assert!(whale_paid < ether(2).as_wei())
+    assert!(whale_paid + whale_refund == ether(2).as_wei())
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn slot_sale_takes_exact_cost() uses (evm: mut Evm) {
+    let ieo = sale(MODE_SLOT)
+    let cost: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::SlotCost { count: 3 },
+        )
+    assert!(cost == 3 * 5_500_000_000_000_000 + 3 * 100_000_000_000)
+    let sold: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 300000,
+            value: wei(cost),
+            message: IeoMsg::BuySlots { count: 3 },
+        )
+    assert!(sold == 3)
+    // Too few slots sold: the sale fails and settles to 90% refunds.
+    assert!(finalize(ieo) == STATE_FAILED)
+    settle_all(ieo)
+    let alloc: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::Allocation { who: evm.address() },
+        )
+    assert!(alloc == 0)
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000_000)]
+fn slot_sale_rejects_wrong_value() uses (evm: mut Evm) {
+    let ieo = sale(MODE_SLOT)
+    let _: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 300000,
+            value: wei(1),
+            message: IeoMsg::BuySlots { count: 1 },
+        )
+}
+
+#[test]
+fn constants_line_up() {
+    assert!(TOKENS_PER_SLOT * 50_000 == IEO_TOKENS)
+    assert!(TARGET * RATE == IEO_TOKENS)
+}
