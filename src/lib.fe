@@ -1,7 +1,8 @@
 // Riddlemine: a fair-launch token mined by AI agents.
-// This ingot holds the RDL token. The IEO, mining and LP modules land in later PRs.
+// This ingot holds the RDL token; the IEO, mining, LP locker and distributor
+// live in their own modules.
 
-use std::evm::StorageMap
+use std::evm::{StorageMap, create2_address, keccak_words}
 
 pub const TOTAL_SUPPLY: u256 = 1_000_000_000_000_000_000_000_000_000
 // 1B * 1e18
@@ -11,6 +12,15 @@ pub const LP_SHARE: u256 = 80_000_000_000_000_000_000_000_000
 // 8%
 pub const MINING_SHARE: u256 = 820_000_000_000_000_000_000_000_000
 // 82%
+// Trade tax: 5% at the first trade, falling linearly to 1% over 30 days.
+pub const TAX_START_BPS: u256 = 500
+pub const TAX_END_BPS: u256 = 100
+pub const TAX_DECAY: u256 = 2_592_000
+// PancakeSwap v3 pool deployer (same on BSC and BSC testnet) and pool init
+// code hash, for the RDL/WBNB 0.25% pool address.
+pub const POOL_DEPLOYER: u256 = 0x41ff9AA7e16B8B1a8a8dc4f0eFacd93D02d071c9
+pub const POOL_INIT_CODE_HASH: u256 = 0x6ce8eb472fa82df5469c6ab6d485f17c3ad13c8cd7af59b3d4a8026c5ce0f7e2
+pub const POOL_FEE: u256 = 2_500
 const MAX_U256: u256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
 
 pub msg Erc20 {
@@ -52,6 +62,30 @@ struct Approval {
     value: u256,
 }
 
+/// Address of the PancakeSwap v3 RDL/WBNB pool at the 0.25% tier.
+pub fn pool_address(token: Address, wbnb: Address) -> Address {
+    let (t0, t1) = if token.word() < wbnb.word() {
+        (token, wbnb)
+    } else {
+        (wbnb, token)
+    }
+    create2_address(
+        deployer: Address::from_word_truncate(POOL_DEPLOYER),
+        salt: keccak_words([t0.word(), t1.word(), POOL_FEE]),
+        init_code_hash: POOL_INIT_CODE_HASH,
+    )
+}
+
+/// Tax in basis points `elapsed` seconds after the first trade.
+pub fn tax_bps(elapsed: u256) -> u256 {
+    if elapsed >= TAX_DECAY {
+        return TAX_END_BPS
+    }
+    TAX_START_BPS - (TAX_START_BPS - TAX_END_BPS) * elapsed / TAX_DECAY
+}
+
+struct Tax { pool: Address, npm: Address, distributor: Address, started: bool, start: Timestamp }
+
 struct Ledger {
     total_supply: u256,
     balances: StorageMap<Address, u256>,
@@ -59,29 +93,63 @@ struct Ledger {
 }
 
 fn move_tokens(from: Address, to: Address, amount: u256)
-uses (ledger: mut Ledger, log: mut Log)
+uses (ctx: Ctx, ledger: mut Ledger, tax: mut Tax, log: mut Log)
 {
     assert!(to != Address::zero(), "transfer to zero address")
     let bal = ledger.balances.get(key: from)
     assert!(bal >= amount, "insufficient balance")
     ledger.balances.set(key: from, value: bal - amount)
-    ledger.balances.set(key: to, value: ledger.balances.get(key: to) + amount)
-    log.emit(Transfer { from, to, value: amount })
+
+    // Buys (from the pool) and sells (to the pool) pay the tax. Liquidity
+    // moved by the position manager and fees collected to the distributor
+    // do not.
+    var fee: u256 = 0
+    if (from == tax.pool || to == tax.pool) && ctx.caller() != tax.npm && to != tax.distributor {
+        if !tax.started {
+            tax.started = true
+            tax.start = ctx.timestamp()
+        }
+        fee = amount * tax_bps(elapsed: (ctx.timestamp() - tax.start).as_seconds()) / 10_000
+    }
+    if fee > 0 {
+        ledger
+            .balances
+            .set(
+                key: tax.distributor,
+                value: ledger.balances.get(key: tax.distributor) + fee,
+            )
+        log.emit(Transfer { from, to: tax.distributor, value: fee })
+    }
+    ledger.balances.set(
+            key: to,
+            value: ledger.balances.get(key: to) + amount - fee,
+        )
+    log.emit(Transfer { from, to, value: amount - fee })
 }
 
 /// Fixed-supply RDL. The whole supply is minted once at deploy, split between
 /// the IEO contract (IEO + LP share) and the mining pool. No owner, no mint,
 /// no pause, no blacklist: there is nothing to administer after deploy.
+/// Trades on the RDL/WBNB v3 pool pay a tax that only ever falls (5% to 1%
+/// over 30 days from the first trade) and goes to the distributor.
 pub contract Riddle uses (ctx: Ctx, log: mut Log) {
     mut ledger: Ledger,
+    mut tax: Tax,
 
-    init(ieo: Address, mining: Address)
-    uses (mut ledger, mut log)
+    init(ieo: Address, mining: Address, distributor: Address, wbnb: Address, npm: Address)
+    uses (ctx, mut ledger, mut tax, mut log)
     {
         assert!(
-            ieo != Address::zero() && mining != Address::zero(),
+            ieo != Address::zero()
+                && mining != Address::zero()
+                && distributor != Address::zero()
+                && wbnb != Address::zero()
+                && npm != Address::zero(),
             "zero address",
         )
+        tax.pool = pool_address(token: ctx.address(), wbnb)
+        tax.npm = npm
+        tax.distributor = distributor
         ledger.total_supply = TOTAL_SUPPLY
         ledger.balances.set(key: ieo, value: IEO_SHARE + LP_SHARE)
         ledger.balances.set(
@@ -116,7 +184,7 @@ pub contract Riddle uses (ctx: Ctx, log: mut Log) {
             ledger.allowances.get(key: (owner, spender))
         }
 
-        Transfer { to, amount } -> bool uses (ctx, mut ledger, mut log) {
+        Transfer { to, amount } -> bool uses (ctx, mut ledger, mut tax, mut log) {
             move_tokens(from: ctx.caller(), to, amount)
             true
         }
@@ -129,7 +197,7 @@ pub contract Riddle uses (ctx: Ctx, log: mut Log) {
         }
 
         TransferFrom { from, to, amount } -> bool
-        uses (ctx, mut ledger, mut log)
+        uses (ctx, mut ledger, mut tax, mut log)
         {
             let spender = ctx.caller()
             let allowed = ledger.allowances.get(key: (from, spender))

@@ -52,7 +52,12 @@ uses (evm: mut Evm)
     let ieo = evm.create2<MockIeo>(value: Wei::zero(), args: (), salt: 1)
     let mining = evm.create2<Mining>(value: Wei::zero(), args: (ieo, 60, lock, vest), salt: 2)
     let me = evm.address()
-    let token = evm.create2<Riddle>(value: Wei::zero(), args: (me, mining), salt: 3)
+    let token = evm
+        .create2<Riddle>(
+            value: Wei::zero(),
+            args: (me, mining, Address::new(0xd15), Address::new(0xb0b), Address::new(0x9a1)),
+            salt: 3,
+        )
     let _: bool = evm
         .call(
             addr: mining,
