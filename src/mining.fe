@@ -16,8 +16,12 @@
 // - Emission: 410M RDL in year one, halving every year after, split across
 //   rounds. A winner gets a tenth of the round, times its boost.
 // - Boost: IEO stake still locked in the IEO lifts rewards linearly up to 2x
-//   at 500,000 RDL locked (the most a 2 BNB bid can buy). The tweet voucher
-//   comes with the distributor.
+//   at 500,000 RDL locked (the most a 2 BNB bid can buy). A daily tweet
+//   voucher adds +10% for that day, and the total never passes 2x.
+// - Vouchers: the bot checks a miner's tweet off-chain and signs
+//   keccak("rddv-voucher", chain id, miner, day) with its key
+//   (scripts/voucher.py). The miner redeems it the same day. The contract
+//   trusts that one fixed signer for the tweet; it cannot see X itself.
 // - Rewards vest linearly over 30 days. A new reward releases what has
 //   vested so far, then vests the rest together with it over a fresh 30 days.
 // - Rewards are paid from what the pool holds beyond stakes and unpaid
@@ -25,6 +29,7 @@
 //   When it runs dry, mining pays nothing.
 
 use std::evm::{StorageMap, keccak_words}
+use std::evm::crypto::ecrecover
 use ingot::Erc20
 
 const E18: u256 = 1_000_000_000_000_000_000
@@ -38,6 +43,11 @@ pub const STAKE_STEP_PER: u256 = 100_000 * E18
 pub const MAX_STAKE: u256 = 18_900 * E18
 pub const BOOST_FULL: u256 = 500_000 * E18
 pub const BPS: u256 = 10_000
+pub const TWEET_BPS: u256 = 1_000
+pub const MAX_BOOST_BPS: u256 = 20_000
+pub const DAY: u256 = 86_400
+const VOUCHER_TAG: u256 = 0x726464762D766F7563686572
+// "rddv-voucher"
 
 /// The one IEO view mining needs.
 pub msg IeoStakeView {
@@ -80,6 +90,12 @@ pub msg MiningMsg {
     RoundReward -> u256,
     #[selector = sol("available()")]
     Available -> u256,
+    #[selector = sol("redeemVoucher(uint256,uint8,uint256,uint256)")]
+    RedeemVoucher { day: u256, v: u8, r: u256, s: u256 } -> bool,
+    #[selector = sol("currentDay()")]
+    CurrentDay -> u256,
+    #[selector = sol("hasVoucher(address)")]
+    HasVoucher { who: Address } -> bool,
 }
 
 #[event]
@@ -143,20 +159,33 @@ pub fn required_stake(mined: u256) -> u256 {
     if need > MAX_STAKE { MAX_STAKE } else { need }
 }
 
-/// Boost in basis points: 1x plus up to 1x for locked IEO stake.
-pub fn boost_bps(locked: u256) -> u256 {
+/// Boost in basis points: 1x, plus up to 1x for locked IEO stake, plus 10%
+/// with today's tweet voucher, capped at 2x.
+pub fn boost_bps(locked: u256, tweeted: bool) -> u256 {
     let extra = if locked >= BOOST_FULL {
         BPS
     } else {
         locked * BPS / BOOST_FULL
     }
-    BPS + extra
+    let tweet = if tweeted { TWEET_BPS } else { 0 }
+    let total = BPS + extra + tweet
+    if total > MAX_BOOST_BPS {
+        MAX_BOOST_BPS
+    } else {
+        total
+    }
+}
+
+/// What the bot signs for a miner's tweet on `day`.
+pub fn voucher_digest(chain: u256, miner: Address, day: u256) -> u256 {
+    keccak_words([VOUCHER_TAG, chain, miner.word(), day])
 }
 
 struct Pool {
     deployer: Address,
     token: Address,
     ieo: Address,
+    signer: Address,
     genesis: Timestamp,
     round_secs: u256,
     lock: Duration,
@@ -174,16 +203,22 @@ struct Pool {
     vest_last: StorageMap<Address, Timestamp>,
     vest_end: StorageMap<Address, Timestamp>,
     ready: StorageMap<Address, u256>,
+    // day of the last voucher + 1, so 0 means never
+    voucher_day: StorageMap<Address, u256>,
 }
 
 pub contract Mining uses (ctx: Ctx, call: mut Call, log: mut Log) {
     mut pool: Pool,
 
     /// `round_secs` is 60 in production, `lock` 7 days, `vest` 30 days.
-    init(ieo: Address, round_secs: u256, lock: Duration, vest: Duration)
+    init(ieo: Address, round_secs: u256, lock: Duration, vest: Duration, signer: Address)
     uses (ctx, mut pool)
     {
-        assert!(ieo != Address::zero(), "zero ieo")
+        assert!(
+            ieo != Address::zero() && signer != Address::zero(),
+            "zero address",
+        )
+        pool.signer = signer
         assert!(round_secs > 0, "zero round")
         pool.deployer = ctx.caller()
         pool.ieo = ieo
@@ -268,7 +303,7 @@ pub contract Mining uses (ctx: Ctx, call: mut Call, log: mut Log) {
                     value: Wei::zero(),
                     message: IeoStakeView::LockedStake { who },
                 )
-            let boost = boost_bps(locked)
+            let boost = boost_bps(locked, tweeted: has_voucher(who))
             var reward = round_reward() / WINNERS_PER_ROUND * boost / BPS
             let left = available()
             if reward > left {
@@ -310,7 +345,7 @@ pub contract Mining uses (ctx: Ctx, call: mut Call, log: mut Log) {
         StakeOf { who } -> u256 uses pool {
             pool.staked.get(key: who)
         }
-        BoostOf { who } -> u256 uses (mut call, pool) {
+        BoostOf { who } -> u256 uses (ctx, mut call, pool) {
             let locked: u256 = call
                 .call(
                     addr: pool.ieo,
@@ -318,7 +353,7 @@ pub contract Mining uses (ctx: Ctx, call: mut Call, log: mut Log) {
                     value: Wei::zero(),
                     message: IeoStakeView::LockedStake { who },
                 )
-            boost_bps(locked)
+            boost_bps(locked, tweeted: has_voucher(who))
         }
         Claimable { who } -> u256 uses (ctx, pool) {
             pool.ready.get(key: who) + vested(who)
@@ -338,11 +373,39 @@ pub contract Mining uses (ctx: Ctx, call: mut Call, log: mut Log) {
         Available -> u256 uses (ctx, mut call, pool) {
             available()
         }
+
+        /// Redeem today's tweet voucher signed by the bot.
+        RedeemVoucher { day, v, r, s } -> bool uses (ctx, mut pool) {
+            assert!(day == current_day(), "voucher is not for today")
+            let who = ctx.caller()
+            let digest = voucher_digest(chain: ctx.chainid(), miner: who, day)
+            let ok = match ecrecover(hash: digest, v: v as u256, r, s) {
+                Result::Ok(Option::Some(addr)) => addr == pool.signer.word(),
+                _ => false,
+            }
+            assert!(ok, "bad voucher")
+            pool.voucher_day.set(key: who, value: day + 1)
+            true
+        }
+        CurrentDay -> u256 uses (ctx, pool) {
+            current_day()
+        }
+        HasVoucher { who } -> bool uses (ctx, pool) {
+            has_voucher(who)
+        }
     }
 }
 
 fn current_round() -> u256 uses (ctx: Ctx, pool: Pool) {
     (ctx.timestamp() - pool.genesis).as_seconds() / pool.round_secs
+}
+
+fn current_day() -> u256 uses (ctx: Ctx, pool: Pool) {
+    (ctx.timestamp() - pool.genesis).as_seconds() / DAY
+}
+
+fn has_voucher(_ who: Address) -> bool uses (ctx: Ctx, pool: Pool) {
+    pool.voucher_day.get(key: who) == current_day() + 1
 }
 
 /// Emission for one round, halving every year since genesis.
