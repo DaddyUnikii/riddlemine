@@ -138,7 +138,7 @@ uses (evm: mut Evm)
 {
     evm.create2<Ieo>(
         value: Wei::zero(),
-        args: (mode, Duration::zero(), d, Address::new(MINING), step),
+        args: (mode, Duration::zero(), d, Address::new(MINING), step, 1),
         salt: 0,
     )
 }
@@ -260,16 +260,20 @@ uses (evm: mut Evm)
 
 #[test]
 fn slot_curve_sums_to_about_400_bnb() {
-    assert!(slot_cost(sold: 0, count: 1) == 5_500_000_000_000_000)
-    assert!(slot_cost(sold: 1, count: 1) == 5_500_100_000_000_000)
+    assert!(
+        slot_cost(sold: 0, count: 1, scale: 1) == 5_500_000_000_000_000,
+    )
+    assert!(
+        slot_cost(sold: 1, count: 1, scale: 1) == 5_500_100_000_000_000,
+    )
     // 50,000 slots: 275 BNB base + 124.9975 BNB of steps.
     assert!(
-        slot_cost(sold: 0, count: 50_000) == 399_997_500_000_000_000_000,
+        slot_cost(sold: 0, count: 50_000, scale: 1) == 399_997_500_000_000_000_000,
     )
     // Buying in two parts costs the same as buying at once.
     assert!(
-        slot_cost(sold: 0, count: 10) + slot_cost(sold: 10, count: 5)
-            == slot_cost(sold: 0, count: 15),
+        slot_cost(sold: 0, count: 10, scale: 1) + slot_cost(sold: 10, count: 5, scale: 1)
+            == slot_cost(sold: 0, count: 15, scale: 1),
     )
 }
 
@@ -278,13 +282,28 @@ fn sqrt_weighting_squeezes_whales() {
     // Oversubscribed book: a 2 BNB whale and a 0.01 BNB minnow.
     let total = TARGET * 2
     let sqrt_sum: u256 = 100_000_000_000_000 // large enough that neither bid hits its cap
-    let whale = bid_allocation(bid: ether(2).as_wei(), total_in: total, sqrt_sum)
-    let minnow = bid_allocation(bid: 10_000_000_000_000_000, total_in: total, sqrt_sum)
+    let whale = bid_allocation(
+        bid: ether(2).as_wei(),
+        total_in: total,
+        sqrt_sum,
+        scale: 1,
+    )
+    let minnow = bid_allocation(
+        bid: 10_000_000_000_000_000,
+        total_in: total,
+        sqrt_sum,
+        scale: 1,
+    )
     // 200x the money buys about 14x the tokens (sqrt(200) = 14.14).
     assert!(whale / minnow == 14)
     // Under the target everyone is filled at the flat rate.
     assert!(
-        bid_allocation(bid: ether(1).as_wei(), total_in: TARGET, sqrt_sum)
+        bid_allocation(
+                bid: ether(1).as_wei(),
+                total_in: TARGET,
+                sqrt_sum,
+                scale: 1,
+            )
             == ether(1).as_wei() * RATE,
     )
 }
@@ -627,4 +646,41 @@ fn locked_stake_cannot_be_withdrawn() uses (evm: mut Evm) {
             value: Wei::zero(),
             message: BuyerMsg::DoWithdraw { ieo, amount: 1 },
         )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn scaled_sale_fills_half_on_faucet_bnb() uses (evm: mut Evm) {
+    // Testnet: scale 10,000 turns the 400 BNB target into 0.04 BNB.
+    let d = dev()
+    let ieo = evm
+        .create2<Ieo>(
+            value: Wei::zero(),
+            args: (MODE_BID, Duration::zero(), d, Address::new(MINING), Duration::zero(), 10_000),
+            salt: 0,
+        )
+    // Caps scale too: 100 wallets at the 0.0002 BNB cap fill half the target.
+    var i: u256 = 0
+    while i < 100 {
+        let b = buyer(i, ether(1))
+        bid_via(b, ieo, 200_000_000_000_000)
+        i += 1
+    }
+    assert!(finalize(ieo) == STATE_SETTLING)
+    settle_all(ieo)
+    let sold: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::SoldTokens {},
+        )
+    assert!(sold == IEO_TOKENS / 2)
+    let cost: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::SlotCost { count: 1 },
+        )
+    assert!(cost == 550_000_000_000)
 }
