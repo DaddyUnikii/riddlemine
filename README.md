@@ -19,8 +19,8 @@ Work in progress, built in small PRs.
 | IEO: bid mode (sqrt-weighted, refunds) and slot mode, soft cap, batched refunds | `src/ieo.fe` | done |
 | Launch (LP seed, leftover burn/mining/bonus), dev pull, IEO stake unlock and early exit | `src/ieo.fe` | done |
 | LP locker: PancakeSwap v3 full-range position, no exit, fees only to `fee_to`, permissionless `increase()` | `src/locker.fe` | done |
-| Mining (subset-sum rounds), boosts, vesting | | next |
-| Trade tax, `distribute()` | | planned |
+| Mining: subset-sum riddle per 60 s round, stake gate, IEO boost up to 2x, halving emission, 30-day vesting | `src/mining.fe`, `scripts/solve.py` | done |
+| Trade tax, `distribute()`, tweet voucher | | next |
 
 | Allocation | Share | Amount |
 | --- | --- | --- |

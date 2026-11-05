@@ -1,0 +1,266 @@
+// Mining tests. The test runner plays the miner and holds the IEO share of
+// RDL. The riddle answers for chain 1, round 0 come from scripts/solve.py.
+
+use ingot::{Riddle, Erc20}
+use ingot::mining::{
+    Mining,
+    MiningMsg,
+    IeoStakeView,
+    BPS,
+    FIRST_YEAR_EMISSION,
+    WINNERS_PER_ROUND,
+    YEAR,
+    boost_bps,
+    check,
+    required_stake,
+    seed_of,
+}
+use std::evm::{SECOND, StorageMap}
+
+const E18: u256 = 1_000_000_000_000_000_000
+const ANSWER: u256 = 0x3dbff9d
+const OTHER_ANSWER: u256 = 0xdf7fb2c
+const DAY: u256 = 86_400
+
+/// IEO stand-in: a settable locked stake per wallet.
+pub msg MockIeoMsg {
+    #[selector = 0x60]
+    SetLocked { who: Address, amount: u256 } -> bool,
+}
+
+pub contract MockIeo {
+    mut locked: StorageMap<Address, u256>,
+
+    recv IeoStakeView {
+        LockedStake { who } -> u256 uses locked {
+            locked.get(key: who)
+        }
+    }
+
+    recv MockIeoMsg {
+        SetLocked { who, amount } -> bool uses (mut locked) {
+            locked.set(key: who, value: amount)
+            true
+        }
+    }
+}
+
+/// Returns (mining, token, ieo) with the token bound and the runner staked.
+fn setup(_ lock: Duration, _ vest: Duration, _ stake: u256) -> (Address, Address, Address)
+uses (evm: mut Evm)
+{
+    let ieo = evm.create2<MockIeo>(value: Wei::zero(), args: (), salt: 1)
+    let mining = evm.create2<Mining>(value: Wei::zero(), args: (ieo, 60, lock, vest), salt: 2)
+    let me = evm.address()
+    let token = evm.create2<Riddle>(value: Wei::zero(), args: (me, mining), salt: 3)
+    let _: bool = evm
+        .call(
+            addr: mining,
+            gas: 200000,
+            value: Wei::zero(),
+            message: MiningMsg::Bind { token },
+        )
+    if stake > 0 {
+        let _: bool = evm
+            .call(
+                addr: token,
+                gas: 100000,
+                value: Wei::zero(),
+                message: Erc20::Approve { spender: mining, amount: stake },
+            )
+        let _: u256 = evm
+            .call(
+                addr: mining,
+                gas: 300000,
+                value: Wei::zero(),
+                message: MiningMsg::Stake { amount: stake },
+            )
+    }
+    (mining, token, ieo)
+}
+
+fn submit(_ mining: Address, _ mask: u256) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: mining,
+        gas: 2000000,
+        value: Wei::zero(),
+        message: MiningMsg::Submit { mask },
+    )
+}
+
+fn base_reward() -> u256 {
+    FIRST_YEAR_EMISSION * 60 / YEAR / WINNERS_PER_ROUND
+}
+
+#[test]
+fn riddle_checks_the_sum() {
+    let seed = seed_of(chain: 1, round: 0)
+    assert!(check(seed, mask: ANSWER))
+    assert!(check(seed, mask: OTHER_ANSWER))
+    assert!(!check(seed, mask: ANSWER - 1))
+    assert!(!check(seed, mask: 0))
+    // Bits past the 32 numbers are refused.
+    assert!(!check(seed, mask: ANSWER + (1 << 32)))
+    // A different round has a different riddle.
+    assert!(!check(seed: seed_of(chain: 1, round: 1), mask: ANSWER))
+}
+
+#[test]
+fn stake_requirement_grows_and_caps() {
+    assert!(required_stake(mined: 0) == 2_500 * E18)
+    assert!(required_stake(mined: 99_999 * E18) == 2_500 * E18)
+    assert!(required_stake(mined: 100_000 * E18) == 2_502 * E18)
+    assert!(required_stake(mined: 410_000_000 * E18) == 10_700 * E18)
+    // The cap is reached once all 820M are mined.
+    assert!(required_stake(mined: 820_000_000 * E18) == 18_900 * E18)
+}
+
+#[test]
+fn boost_is_linear_up_to_2x() {
+    assert!(boost_bps(locked: 0) == BPS)
+    assert!(boost_bps(locked: 250_000 * E18) == 15_000)
+    assert!(boost_bps(locked: 500_000 * E18) == 20_000)
+    assert!(boost_bps(locked: 5_000_000 * E18) == 20_000)
+}
+
+#[test]
+fn a_right_answer_earns_a_tenth_of_the_round() uses (evm: mut Evm) {
+    let (mining, token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    let round: u256 = evm
+        .call(
+            addr: mining,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MiningMsg::CurrentRound {},
+        )
+    assert!(round == 0)
+    let reward = submit(mining, ANSWER)
+    assert!(reward == base_reward())
+    let winners: u256 = evm
+        .call(
+            addr: mining,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MiningMsg::Winners { round: 0 },
+        )
+    assert!(winners == 1)
+
+    // No vesting period here, so it is claimable at once.
+    let before: u256 = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::BalanceOf { account: evm.address() },
+        )
+    let claimed: u256 = evm
+        .call(
+            addr: mining,
+            gas: 300000,
+            value: Wei::zero(),
+            message: MiningMsg::Claim {},
+        )
+    assert!(claimed == reward)
+    let after: u256 = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::BalanceOf { account: evm.address() },
+        )
+    assert!(after - before == reward)
+}
+
+#[test]
+fn locked_ieo_stake_doubles_the_reward() uses (evm: mut Evm) {
+    let (mining, _token, ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    let _: bool = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MockIeoMsg::SetLocked { who: evm.address(), amount: 500_000 * E18 },
+        )
+    let reward = submit(mining, ANSWER)
+    assert!(reward == base_reward() * 2)
+}
+
+#[test(should_revert)]
+fn one_win_per_wallet_per_round() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    let _ = submit(mining, ANSWER)
+    let _ = submit(mining, OTHER_ANSWER)
+}
+
+#[test(should_revert)]
+fn wrong_answer_reverts() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    let _ = submit(mining, ANSWER - 1)
+}
+
+#[test(should_revert)]
+fn mining_needs_the_stake() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_499 * E18)
+    let _ = submit(mining, ANSWER)
+}
+
+#[test]
+fn rewards_vest_over_time() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), SECOND * (30 * DAY), 2_500 * E18)
+    let reward = submit(mining, ANSWER)
+    let now: u256 = evm
+        .call(
+            addr: mining,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MiningMsg::Claimable { who: evm.address() },
+        )
+    assert!(now == 0)
+    let vesting: u256 = evm
+        .call(
+            addr: mining,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MiningMsg::Vesting { who: evm.address() },
+        )
+    assert!(vesting == reward)
+}
+
+#[test(should_revert)]
+fn stake_stays_locked_for_the_lock_period() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(SECOND * (7 * DAY), Duration::zero(), 2_500 * E18)
+    let _: u256 = evm
+        .call(
+            addr: mining,
+            gas: 300000,
+            value: Wei::zero(),
+            message: MiningMsg::Unstake {},
+        )
+}
+
+#[test]
+fn stake_comes_back_after_the_lock() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    let back: u256 = evm
+        .call(
+            addr: mining,
+            gas: 300000,
+            value: Wei::zero(),
+            message: MiningMsg::Unstake {},
+        )
+    assert!(back == 2_500 * E18)
+}
+
+#[test]
+fn pool_excludes_stakes_and_unpaid_rewards() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), SECOND * (30 * DAY), 2_500 * E18)
+    let reward = submit(mining, ANSWER)
+    let left: u256 = evm
+        .call(
+            addr: mining,
+            gas: 200000,
+            value: Wei::zero(),
+            message: MiningMsg::Available {},
+        )
+    assert!(left == 820_000_000 * E18 - reward)
+}

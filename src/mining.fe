@@ -1,0 +1,407 @@
+// Riddlemine mining: solve a small subset-sum riddle each round, earn RDL.
+//
+// Each round (60 s in production) has a public riddle: 32 numbers between 1
+// and 2^20 and a target, all derived from keccak(chain id, round). A miner
+// answers with a 32-bit mask; the contract checks that the chosen numbers add
+// up to the target. That check is all a contract can do: it cannot tell an AI
+// agent from any other program, and a laptop solves the riddle in
+// milliseconds with meet-in-the-middle. The riddle is a fair, cheap gate that
+// spreads rewards across rounds, not a proof of AI work.
+//
+// Rules:
+// - To mine, a wallet keeps a stake here: 2,500 RDL, plus 2 RDL for every
+//   100,000 RDL mined so far, at most 18,900. A stake unlocks 7 days after
+//   it was last topped up.
+// - Up to 10 winners per round, one win per wallet per round.
+// - Emission: 410M RDL in year one, halving every year after, split across
+//   rounds. A winner gets a tenth of the round, times its boost.
+// - Boost: IEO stake still locked in the IEO lifts rewards linearly up to 2x
+//   at 500,000 RDL locked (the most a 2 BNB bid can buy). The tweet voucher
+//   comes with the distributor.
+// - Rewards vest linearly over 30 days. A new reward releases what has
+//   vested so far, then vests the rest together with it over a fresh 30 days.
+// - Rewards are paid from what the pool holds beyond stakes and unpaid
+//   rewards (820M at deploy, plus IEO leftovers and early-exit penalties).
+//   When it runs dry, mining pays nothing.
+
+use std::evm::{StorageMap, keccak_words}
+use ingot::Erc20
+
+const E18: u256 = 1_000_000_000_000_000_000
+pub const NUMBERS: u256 = 32
+pub const WINNERS_PER_ROUND: u256 = 10
+pub const YEAR: u256 = 31_536_000
+pub const FIRST_YEAR_EMISSION: u256 = 410_000_000 * E18
+pub const BASE_STAKE: u256 = 2_500 * E18
+pub const STAKE_STEP: u256 = 2 * E18
+pub const STAKE_STEP_PER: u256 = 100_000 * E18
+pub const MAX_STAKE: u256 = 18_900 * E18
+pub const BOOST_FULL: u256 = 500_000 * E18
+pub const BPS: u256 = 10_000
+
+/// The one IEO view mining needs.
+pub msg IeoStakeView {
+    #[selector = sol("lockedStake(address)")]
+    LockedStake { who: Address } -> u256,
+}
+
+pub msg MiningMsg {
+    #[selector = sol("bind(address)")]
+    Bind { token: Address } -> bool,
+    #[selector = sol("stake(uint256)")]
+    Stake { amount: u256 } -> u256,
+    #[selector = sol("unstake()")]
+    Unstake -> u256,
+    #[selector = sol("submit(uint256)")]
+    Submit { mask: u256 } -> u256,
+    #[selector = sol("claim()")]
+    Claim -> u256,
+    #[selector = sol("currentRound()")]
+    CurrentRound -> u256,
+    #[selector = sol("number(uint256,uint256)")]
+    Number { round: u256, index: u256 } -> u256,
+    #[selector = sol("target(uint256)")]
+    Target { round: u256 } -> u256,
+    #[selector = sol("requiredStake()")]
+    RequiredStake -> u256,
+    #[selector = sol("stakeOf(address)")]
+    StakeOf { who: Address } -> u256,
+    #[selector = sol("boostOf(address)")]
+    BoostOf { who: Address } -> u256,
+    #[selector = sol("claimable(address)")]
+    Claimable { who: Address } -> u256,
+    #[selector = sol("vesting(address)")]
+    Vesting { who: Address } -> u256,
+    #[selector = sol("winners(uint256)")]
+    Winners { round: u256 } -> u256,
+    #[selector = sol("totalMined()")]
+    TotalMined -> u256,
+    #[selector = sol("roundReward()")]
+    RoundReward -> u256,
+    #[selector = sol("available()")]
+    Available -> u256,
+}
+
+#[event]
+struct Mined {
+    #[indexed]
+    miner: Address,
+    #[indexed]
+    round: u256,
+    reward: u256,
+    boost_bps: u256,
+}
+
+#[event]
+struct Staked {
+    #[indexed]
+    miner: Address,
+    total: u256,
+}
+
+/// Seed of a round's riddle.
+pub fn seed_of(chain: u256, round: u256) -> u256 {
+    keccak_words([chain, round, 0x726964646c656d696e65]) // "riddlemine"
+}
+
+/// Number `i` of a riddle: 1 to 2^20.
+pub fn number_of(seed: u256, i: u256) -> u256 {
+    (keccak_words([seed, i]) >> 236) + 1
+}
+
+/// Target of a riddle: somewhere between a quarter and three quarters of the
+/// sum of its numbers, where solutions are plentiful.
+pub fn target_of(seed: u256) -> u256 {
+    var total: u256 = 0
+    var i: u256 = 0
+    while i < NUMBERS {
+        total += number_of(seed, i)
+        i += 1
+    }
+    total / 4 + keccak_words([seed, NUMBERS]) % (total / 2)
+}
+
+/// Does `mask` pick numbers that add up to the target?
+pub fn check(seed: u256, mask: u256) -> bool {
+    if mask == 0 || mask >> NUMBERS != 0 {
+        return false
+    }
+    var sum: u256 = 0
+    var i: u256 = 0
+    while i < NUMBERS {
+        if (mask >> i) & 1 == 1 {
+            sum += number_of(seed, i)
+        }
+        i += 1
+    }
+    sum == target_of(seed)
+}
+
+/// Stake a miner needs once `mined` RDL have been mined.
+pub fn required_stake(mined: u256) -> u256 {
+    let need = BASE_STAKE + STAKE_STEP * (mined / STAKE_STEP_PER)
+    if need > MAX_STAKE { MAX_STAKE } else { need }
+}
+
+/// Boost in basis points: 1x plus up to 1x for locked IEO stake.
+pub fn boost_bps(locked: u256) -> u256 {
+    let extra = if locked >= BOOST_FULL {
+        BPS
+    } else {
+        locked * BPS / BOOST_FULL
+    }
+    BPS + extra
+}
+
+struct Pool {
+    deployer: Address,
+    token: Address,
+    ieo: Address,
+    genesis: Timestamp,
+    round_secs: u256,
+    lock: Duration,
+    vest: Duration,
+    total_mined: u256,
+    total_staked: u256,
+    total_owed: u256,
+    staked: StorageMap<Address, u256>,
+    staked_at: StorageMap<Address, Timestamp>,
+    // last round won + 1, so 0 means never
+    last_win: StorageMap<Address, u256>,
+    winners: StorageMap<u256, u256>,
+    // vesting: remaining amount, last update, end
+    vest_left: StorageMap<Address, u256>,
+    vest_last: StorageMap<Address, Timestamp>,
+    vest_end: StorageMap<Address, Timestamp>,
+    ready: StorageMap<Address, u256>,
+}
+
+pub contract Mining uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    mut pool: Pool,
+
+    /// `round_secs` is 60 in production, `lock` 7 days, `vest` 30 days.
+    init(ieo: Address, round_secs: u256, lock: Duration, vest: Duration)
+    uses (ctx, mut pool)
+    {
+        assert!(ieo != Address::zero(), "zero ieo")
+        assert!(round_secs > 0, "zero round")
+        pool.deployer = ctx.caller()
+        pool.ieo = ieo
+        pool.round_secs = round_secs
+        pool.lock = lock
+        pool.vest = vest
+        pool.genesis = ctx.timestamp()
+    }
+
+    recv MiningMsg {
+        /// The token mints its mining share to this contract, so it is
+        /// deployed after it; the deployer binds it once.
+        Bind { token } -> bool uses (ctx, mut call, mut pool) {
+            assert!(ctx.caller() == pool.deployer, "only deployer")
+            assert!(pool.token == Address::zero(), "already bound")
+            pool.token = token
+            assert!(
+                balance_of(token, who: ctx.address()) > 0,
+                "token not funded",
+            )
+            true
+        }
+
+        Stake { amount } -> u256 uses (ctx, mut call, mut pool, mut log) {
+            assert!(pool.token != Address::zero(), "not bound")
+            assert!(amount > 0, "zero stake")
+            let who = ctx.caller()
+            let ok: bool = call
+                .call(
+                    addr: pool.token,
+                    gas: 100000,
+                    value: Wei::zero(),
+                    message: Erc20::TransferFrom { from: who, to: ctx.address(), amount },
+                )
+            assert!(ok, "transfer failed")
+            let total = pool.staked.get(key: who) + amount
+            pool.staked.set(key: who, value: total)
+            pool.staked_at.set(key: who, value: ctx.timestamp())
+            pool.total_staked += amount
+            log.emit(Staked { miner: who, total })
+            total
+        }
+
+        Unstake -> u256 uses (ctx, mut call, mut pool, mut log) {
+            let who = ctx.caller()
+            let amount = pool.staked.get(key: who)
+            assert!(amount > 0, "no stake")
+            assert!(
+                ctx.timestamp() >= pool.staked_at.get(key: who) + pool.lock,
+                "stake still locked",
+            )
+            pool.staked.set(key: who, value: 0)
+            pool.total_staked -= amount
+            send(pool.token, to: who, amount)
+            log.emit(Staked { miner: who, total: 0 })
+            amount
+        }
+
+        Submit { mask } -> u256 uses (ctx, mut call, mut pool, mut log) {
+            assert!(pool.token != Address::zero(), "not bound")
+            let who = ctx.caller()
+            assert!(
+                pool.staked.get(key: who) >= required_stake(mined: pool.total_mined),
+                "stake too small",
+            )
+            let round = current_round()
+            assert!(
+                pool.last_win.get(key: who) != round + 1,
+                "already won this round",
+            )
+            let won = pool.winners.get(key: round)
+            assert!(won < WINNERS_PER_ROUND, "round is full")
+            assert!(
+                check(seed: seed_of(chain: ctx.chainid(), round), mask),
+                "wrong answer",
+            )
+
+            let locked: u256 = call
+                .call(
+                    addr: pool.ieo,
+                    gas: 100000,
+                    value: Wei::zero(),
+                    message: IeoStakeView::LockedStake { who },
+                )
+            let boost = boost_bps(locked)
+            var reward = round_reward() / WINNERS_PER_ROUND * boost / BPS
+            let left = available()
+            if reward > left {
+                reward = left
+            }
+
+            pool.last_win.set(key: who, value: round + 1)
+            pool.winners.set(key: round, value: won + 1)
+            pool.total_mined += reward
+            pool.total_owed += reward
+            add_vesting(who, amount: reward)
+            log.emit(Mined { miner: who, round, reward, boost_bps: boost })
+            reward
+        }
+
+        Claim -> u256 uses (ctx, mut call, mut pool) {
+            let who = ctx.caller()
+            release(who)
+            let amount = pool.ready.get(key: who)
+            assert!(amount > 0, "nothing vested")
+            pool.ready.set(key: who, value: 0)
+            pool.total_owed -= amount
+            send(pool.token, to: who, amount)
+            amount
+        }
+
+        CurrentRound -> u256 uses (ctx, pool) {
+            current_round()
+        }
+        Number { round, index } -> u256 uses ctx {
+            number_of(seed: seed_of(chain: ctx.chainid(), round), i: index)
+        }
+        Target { round } -> u256 uses ctx {
+            target_of(seed: seed_of(chain: ctx.chainid(), round))
+        }
+        RequiredStake -> u256 uses pool {
+            required_stake(mined: pool.total_mined)
+        }
+        StakeOf { who } -> u256 uses pool {
+            pool.staked.get(key: who)
+        }
+        BoostOf { who } -> u256 uses (mut call, pool) {
+            let locked: u256 = call
+                .call(
+                    addr: pool.ieo,
+                    gas: 100000,
+                    value: Wei::zero(),
+                    message: IeoStakeView::LockedStake { who },
+                )
+            boost_bps(locked)
+        }
+        Claimable { who } -> u256 uses (ctx, pool) {
+            pool.ready.get(key: who) + vested(who)
+        }
+        Vesting { who } -> u256 uses (ctx, pool) {
+            pool.vest_left.get(key: who) - vested(who)
+        }
+        Winners { round } -> u256 uses pool {
+            pool.winners.get(key: round)
+        }
+        TotalMined -> u256 uses pool {
+            pool.total_mined
+        }
+        RoundReward -> u256 uses (ctx, pool) {
+            round_reward()
+        }
+        Available -> u256 uses (ctx, mut call, pool) {
+            available()
+        }
+    }
+}
+
+fn current_round() -> u256 uses (ctx: Ctx, pool: Pool) {
+    (ctx.timestamp() - pool.genesis).as_seconds() / pool.round_secs
+}
+
+/// Emission for one round, halving every year since genesis.
+fn round_reward() -> u256 uses (ctx: Ctx, pool: Pool) {
+    let year = (ctx.timestamp() - pool.genesis).as_seconds() / YEAR
+    if year >= 64 { return 0 }
+    (FIRST_YEAR_EMISSION * pool.round_secs / YEAR) >> year
+}
+
+/// RDL the pool can still pay out: its balance minus stakes and unpaid rewards.
+fn available() -> u256 uses (ctx: Ctx, call: mut Call, pool: Pool) {
+    let bal = balance_of(pool.token, who: ctx.address())
+    let held = pool.total_staked + pool.total_owed
+    if bal > held { bal - held } else { 0 }
+}
+
+/// Part of a miner's vesting amount that has vested by now.
+fn vested(_ who: Address) -> u256 uses (ctx: Ctx, pool: Pool) {
+    let left = pool.vest_left.get(key: who)
+    if left == 0 { return 0 }
+    let now = ctx.timestamp()
+    let end = pool.vest_end.get(key: who)
+    if now >= end { return left }
+    let last = pool.vest_last.get(key: who)
+    left * (now - last).as_seconds() / (end - last).as_seconds()
+}
+
+/// Move what has vested into `ready`.
+fn release(_ who: Address) uses (ctx: Ctx, pool: mut Pool) {
+    let v = vested(who)
+    if v > 0 {
+        pool.vest_left.set(key: who, value: pool.vest_left.get(key: who) - v)
+        pool.ready.set(key: who, value: pool.ready.get(key: who) + v)
+    }
+    pool.vest_last.set(key: who, value: ctx.timestamp())
+}
+
+fn add_vesting(_ who: Address, amount: u256) uses (ctx: Ctx, pool: mut Pool) {
+    release(who)
+    pool.vest_left.set(key: who, value: pool.vest_left.get(key: who) + amount)
+    pool.vest_end.set(key: who, value: ctx.timestamp() + pool.vest)
+}
+
+fn balance_of(_ token: Address, who: Address) -> u256 uses (call: mut Call) {
+    call.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: who },
+    )
+}
+
+fn send(_ token: Address, to: Address, amount: u256) uses (call: mut Call) {
+    let ok: bool = call
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to, amount },
+        )
+    assert!(ok, "token transfer failed")
+}
