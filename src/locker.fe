@@ -150,7 +150,7 @@ pub contract Locker uses (ctx: Ctx, call: mut Call, log: mut Log) {
             let _: Address = call
                 .call(
                     addr: lock.npm,
-                    gas: 5000000,
+                    gas: 7_000_000,
                     value: Wei::zero(),
                     message: PositionManagerMsg::CreatePool {
                         token0: t0,
@@ -162,7 +162,7 @@ pub contract Locker uses (ctx: Ctx, call: mut Call, log: mut Log) {
             let (token_id, liquidity, _used0, _used1): (u256, u256, u256, u256) = call
                 .call(
                     addr: lock.npm,
-                    gas: 1000000,
+                    gas: 1_500_000,
                     value: Wei::zero(),
                     message: PositionManagerMsg::Mint {
                         token0: t0,

@@ -466,10 +466,12 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
             send_tokens(book.token, to: book.locker, amount: lp_tokens)
             send_tokens(book.token, to: Address::new(DEAD), amount: burn_all)
             send_tokens(book.token, to: book.mining, amount: to_mining)
+            // The locker creates the v3 pool (several million gas on BSC), so
+            // forward enough for it; 500k ran out on testnet.
             let seeded: bool = call
                 .call(
                     addr: book.locker,
-                    gas: 500000,
+                    gas: 9_000_000,
                     value: wei_of(lp_bnb),
                     message: LockerMsg::Seed { tokens: lp_tokens },
                 )
