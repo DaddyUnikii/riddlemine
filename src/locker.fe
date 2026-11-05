@@ -1,0 +1,260 @@
+// Riddlemine LP locker: owns the RDL/WBNB PancakeSwap v3 position forever.
+//
+// - `seed(tokens)` is called once by the IEO at launch with the BNB as value
+//   and the RDL already transferred in. It wraps the BNB, creates the 0.25%
+//   pool at the sale price if needed, and mints one full-range position.
+// - The position NFT never leaves: there is no transfer, no decreaseLiquidity
+//   and no owner. The locker can only `collect()` trading fees, and those go
+//   to the fixed `fee_to` address (the distributor).
+// - `increase()` adds any RDL and WBNB the locker holds (for example the 25%
+//   of tax the distributor sends back to the LP) into the same position.
+// Both are permissionless.
+//
+// Known limit: if someone creates the pool first at a different price,
+// `seed` adds liquidity at that price. Launch right after the IEO settles.
+
+use core::num::{isqrt, mul_div}
+use std::evm::StorageMap
+use ingot::Erc20
+use ingot::ieo::LockerMsg
+
+pub const FEE_TIER: u256 = 2_500
+// Full range for tick spacing 50.
+pub const TICK_LOWER: i32 = -887_250
+pub const TICK_UPPER: i32 = 887_250
+const MAX_U128: u256 = 0xffffffffffffffffffffffffffffffff
+const Q192: u256 = 0x1000000000000000000000000000000000000000000000000
+
+/// The parts of WBNB the locker uses.
+pub msg WbnbMsg {
+    #[selector = sol("deposit()")]
+    Deposit -> (),
+}
+
+/// The parts of PancakeSwap v3's NonfungiblePositionManager the locker uses.
+/// The structs are all static, so their fields are passed flat: the ABI
+/// encoding is the same as the Solidity tuple. Fe's `sol(...)` checks each
+/// field against the signature (uint24, uint160, a tuple), so these use the
+/// raw selectors, keccak-checked against the signatures in the comments.
+pub msg PositionManagerMsg {
+    // createAndInitializePoolIfNecessary(address,address,uint24,uint160)
+    #[selector = 0x13ead562]
+    CreatePool { token0: Address, token1: Address, fee: u256, sqrt_price_x96: u256 } -> Address,
+    // mint((address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256))
+    #[selector = 0x88316456]
+    Mint {
+        token0: Address,
+        token1: Address,
+        fee: u256,
+        tick_lower: i32,
+        tick_upper: i32,
+        amount0_desired: u256,
+        amount1_desired: u256,
+        amount0_min: u256,
+        amount1_min: u256,
+        recipient: Address,
+        deadline: u256,
+    } -> (u256, u256, u256, u256),
+    // increaseLiquidity((uint256,uint256,uint256,uint256,uint256,uint256))
+    #[selector = 0x219f5d17]
+    IncreaseLiquidity {
+        token_id: u256,
+        amount0_desired: u256,
+        amount1_desired: u256,
+        amount0_min: u256,
+        amount1_min: u256,
+        deadline: u256,
+    } -> (u256, u256, u256),
+    // collect((uint256,address,uint128,uint128))
+    #[selector = 0xfc6f7865]
+    Collect { token_id: u256, recipient: Address, amount0_max: u256, amount1_max: u256 } -> (
+        u256,
+        u256,
+    ),
+}
+
+pub msg LockerViews {
+    #[selector = sol("collect()")]
+    CollectFees -> (u256, u256),
+    #[selector = sol("increase()")]
+    Increase -> u256,
+    #[selector = sol("tokenId()")]
+    TokenId -> u256,
+    #[selector = sol("feeTo()")]
+    FeeTo -> Address,
+}
+
+#[event]
+struct Seeded { token_id: u256, liquidity: u256, rdl: u256, wbnb: u256 }
+
+/// sqrt(amount1 / amount0) in Q64.96, the pool's starting price.
+pub fn sqrt_price_x96(amount0: u256, amount1: u256) -> u256 {
+    isqrt(mul_div(amount1, Q192, amount0))
+}
+
+struct Lock {
+    ieo: Address,
+    token: Address,
+    wbnb: Address,
+    npm: Address,
+    fee_to: Address,
+    token_id: u256,
+    seeded: bool,
+}
+
+pub contract Locker uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    mut lock: Lock,
+
+    init(ieo: Address, token: Address, wbnb: Address, npm: Address, fee_to: Address)
+    uses (mut lock)
+    {
+        assert!(
+            ieo != Address::zero() && token != Address::zero() && wbnb != Address::zero(),
+            "zero address",
+        )
+        assert!(
+            npm != Address::zero() && fee_to != Address::zero(),
+            "zero address",
+        )
+        lock.ieo = ieo
+        lock.token = token
+        lock.wbnb = wbnb
+        lock.npm = npm
+        lock.fee_to = fee_to
+    }
+
+    recv LockerMsg {
+        #[payable]
+        Seed { tokens } -> bool uses (ctx, mut call, mut lock, mut log) {
+            assert!(ctx.caller() == lock.ieo, "only the IEO")
+            assert!(!lock.seeded, "already seeded")
+            lock.seeded = true
+            let bnb = ctx.value().as_wei()
+            let _: () = call
+                .call(
+                    addr: lock.wbnb,
+                    gas: 100000,
+                    value: ctx.value(),
+                    message: WbnbMsg::Deposit {},
+                )
+            approve(lock.token, spender: lock.npm, amount: tokens)
+            approve(lock.wbnb, spender: lock.npm, amount: bnb)
+
+            // Uniswap-style pools sort tokens by address.
+            let rdl_first = lock.token.word() < lock.wbnb.word()
+            let (t0, t1, a0, a1) = if rdl_first {
+                (lock.token, lock.wbnb, tokens, bnb)
+            } else {
+                (lock.wbnb, lock.token, bnb, tokens)
+            }
+            let _: Address = call
+                .call(
+                    addr: lock.npm,
+                    gas: 5000000,
+                    value: Wei::zero(),
+                    message: PositionManagerMsg::CreatePool {
+                        token0: t0,
+                        token1: t1,
+                        fee: FEE_TIER,
+                        sqrt_price_x96: sqrt_price_x96(amount0: a0, amount1: a1),
+                    },
+                )
+            let (token_id, liquidity, _used0, _used1): (u256, u256, u256, u256) = call
+                .call(
+                    addr: lock.npm,
+                    gas: 1000000,
+                    value: Wei::zero(),
+                    message: PositionManagerMsg::Mint {
+                        token0: t0,
+                        token1: t1,
+                        fee: FEE_TIER,
+                        tick_lower: TICK_LOWER,
+                        tick_upper: TICK_UPPER,
+                        amount0_desired: a0,
+                        amount1_desired: a1,
+                        amount0_min: 0,
+                        amount1_min: 0,
+                        recipient: ctx.address(),
+                        deadline: ctx.timestamp().as_seconds(),
+                    },
+                )
+            lock.token_id = token_id
+            log.emit(Seeded { token_id, liquidity, rdl: tokens, wbnb: bnb })
+            true
+        }
+    }
+
+    recv LockerViews {
+        /// Send the position's trading fees to `fee_to`.
+        CollectFees -> (u256, u256) uses (mut call, lock) {
+            assert!(lock.seeded, "not seeded")
+            call.call(
+                addr: lock.npm,
+                gas: 300000,
+                value: Wei::zero(),
+                message: PositionManagerMsg::Collect {
+                    token_id: lock.token_id,
+                    recipient: lock.fee_to,
+                    amount0_max: MAX_U128,
+                    amount1_max: MAX_U128,
+                },
+            )
+        }
+
+        /// Add whatever RDL and WBNB the locker holds to the position.
+        Increase -> u256 uses (ctx, mut call, lock) {
+            assert!(lock.seeded, "not seeded")
+            let rdl = balance_of(lock.token, who: ctx.address())
+            let wbnb = balance_of(lock.wbnb, who: ctx.address())
+            assert!(rdl > 0 || wbnb > 0, "nothing to add")
+            approve(lock.token, spender: lock.npm, amount: rdl)
+            approve(lock.wbnb, spender: lock.npm, amount: wbnb)
+            let rdl_first = lock.token.word() < lock.wbnb.word()
+            let (a0, a1) = if rdl_first { (rdl, wbnb) } else { (wbnb, rdl) }
+            let (liquidity, _used0, _used1): (u256, u256, u256) = call
+                .call(
+                    addr: lock.npm,
+                    gas: 1000000,
+                    value: Wei::zero(),
+                    message: PositionManagerMsg::IncreaseLiquidity {
+                        token_id: lock.token_id,
+                        amount0_desired: a0,
+                        amount1_desired: a1,
+                        amount0_min: 0,
+                        amount1_min: 0,
+                        deadline: ctx.timestamp().as_seconds(),
+                    },
+                )
+            liquidity
+        }
+
+        TokenId -> u256 uses lock {
+            lock.token_id
+        }
+        FeeTo -> Address uses lock {
+            lock.fee_to
+        }
+    }
+}
+
+fn approve(_ token: Address, spender: Address, amount: u256)
+uses (call: mut Call)
+{
+    let ok: bool = call
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Approve { spender, amount },
+        )
+    assert!(ok, "approve failed")
+}
+
+fn balance_of(_ token: Address, who: Address) -> u256 uses (call: mut Call) {
+    call.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: who },
+    )
+}

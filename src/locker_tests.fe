@@ -1,0 +1,374 @@
+// LP locker tests against small stand-ins for WBNB and PancakeSwap v3's
+// position manager. The test runner plays the IEO.
+
+use ingot::{Riddle, Erc20}
+use ingot::ieo::LockerMsg
+use ingot::locker::{
+    Locker,
+    LockerViews,
+    PositionManagerMsg,
+    WbnbMsg,
+    FEE_TIER,
+    TICK_LOWER,
+    TICK_UPPER,
+    sqrt_price_x96,
+}
+use std::evm::{ether, StorageMap}
+
+const MINING: u256 = 0x313
+const FEE_TO: u256 = 0xfee
+const Q96: u256 = 0x1000000000000000000000000
+
+/// WBNB stand-in: deposit credits the sender, approvals are accepted.
+pub contract MockWbnb uses (ctx: Ctx) {
+    mut bal: StorageMap<Address, u256>,
+
+    recv WbnbMsg {
+        #[payable]
+        Deposit -> () uses (ctx, mut bal) {
+            bal.set(
+                key: ctx.caller(),
+                value: bal.get(key: ctx.caller()) + ctx.value().as_wei(),
+            )
+        }
+    }
+
+    recv Erc20 {
+        Name -> String<10> {
+            "WrappedBNB"
+        }
+        Symbol -> String<3> {
+            "WBN"
+        }
+        Decimals -> u8 {
+            18
+        }
+        TotalSupply -> u256 {
+            0
+        }
+        BalanceOf { account } -> u256 uses bal {
+            bal.get(key: account)
+        }
+        Allowance { owner: _, spender: _ } -> u256 {
+            0
+        }
+        Transfer { to: _, amount: _ } -> bool {
+            true
+        }
+        Approve { spender: _, amount: _ } -> bool {
+            true
+        }
+        TransferFrom { from: _, to: _, amount: _ } -> bool {
+            true
+        }
+    }
+}
+
+/// Position manager stand-in: records what it was asked to do.
+pub msg NpmViews {
+    #[selector = 0x50]
+    Pool -> (Address, Address, u256, u256),
+    #[selector = 0x51]
+    Ticks -> (i32, i32),
+    #[selector = 0x52]
+    Amounts -> (u256, u256, Address),
+    #[selector = 0x53]
+    Collected -> (u256, Address, u256),
+    #[selector = 0x54]
+    Increased -> (u256, u256, u256),
+}
+
+struct Seen {
+    t0: Address,
+    t1: Address,
+    fee: u256,
+    sqrt_price: u256,
+    lower: i32,
+    upper: i32,
+    a0: u256,
+    a1: u256,
+    recipient: Address,
+    collect_id: u256,
+    collect_to: Address,
+    collect_max: u256,
+    inc_id: u256,
+    inc0: u256,
+    inc1: u256,
+}
+
+pub contract MockNpm {
+    mut seen: Seen,
+
+    recv PositionManagerMsg {
+        CreatePool { token0, token1, fee, sqrt_price_x96 } -> Address
+        uses (mut seen)
+        {
+            seen.t0 = token0
+            seen.t1 = token1
+            seen.fee = fee
+            seen.sqrt_price = sqrt_price_x96
+            Address::new(0x9001)
+        }
+        Mint {
+            token0: _,
+            token1: _,
+            fee: _,
+            tick_lower,
+            tick_upper,
+            amount0_desired,
+            amount1_desired,
+            amount0_min: _,
+            amount1_min: _,
+            recipient,
+            deadline: _,
+        } -> (u256, u256, u256, u256)
+        uses (mut seen)
+        {
+            seen.lower = tick_lower
+            seen.upper = tick_upper
+            seen.a0 = amount0_desired
+            seen.a1 = amount1_desired
+            seen.recipient = recipient
+            (7, 1000, amount0_desired, amount1_desired)
+        }
+        IncreaseLiquidity {
+            token_id,
+            amount0_desired,
+            amount1_desired,
+            amount0_min: _,
+            amount1_min: _,
+            deadline: _,
+        } -> (u256, u256, u256)
+        uses (mut seen)
+        {
+            seen.inc_id = token_id
+            seen.inc0 = amount0_desired
+            seen.inc1 = amount1_desired
+            (5, amount0_desired, amount1_desired)
+        }
+        Collect { token_id, recipient, amount0_max, amount1_max: _ } -> (u256, u256)
+        uses (mut seen)
+        {
+            seen.collect_id = token_id
+            seen.collect_to = recipient
+            seen.collect_max = amount0_max
+            (0, 0)
+        }
+    }
+
+    recv NpmViews {
+        Pool -> (Address, Address, u256, u256) uses seen {
+            (seen.t0, seen.t1, seen.fee, seen.sqrt_price)
+        }
+        Ticks -> (i32, i32) uses seen {
+            (seen.lower, seen.upper)
+        }
+        Amounts -> (u256, u256, Address) uses seen {
+            (seen.a0, seen.a1, seen.recipient)
+        }
+        Collected -> (u256, Address, u256) uses seen {
+            (seen.collect_id, seen.collect_to, seen.collect_max)
+        }
+        Increased -> (u256, u256, u256) uses seen {
+            (seen.inc_id, seen.inc0, seen.inc1)
+        }
+    }
+}
+
+/// Returns (locker, token, wbnb, npm), with the runner as the IEO.
+fn setup() -> (Address, Address, Address, Address) uses (evm: mut Evm) {
+    let me = evm.address()
+    let token = evm.create2<Riddle>(
+            value: Wei::zero(),
+            args: (me, Address::new(MINING)),
+            salt: 1,
+        )
+    let wbnb = evm.create2<MockWbnb>(value: Wei::zero(), args: (), salt: 2)
+    let npm = evm.create2<MockNpm>(value: Wei::zero(), args: (), salt: 3)
+    let locker = evm
+        .create2<Locker>(
+            value: Wei::zero(),
+            args: (me, token, wbnb, npm, Address::new(FEE_TO)),
+            salt: 4,
+        )
+    (locker, token, wbnb, npm)
+}
+
+fn seed(_ locker: Address, _ token: Address, _ rdl: u256, _ bnb: Wei)
+uses (evm: mut Evm)
+{
+    let _: bool = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to: locker, amount: rdl },
+        )
+    let _: bool = evm
+        .call(
+            addr: locker,
+            gas: 8000000,
+            value: bnb,
+            message: LockerMsg::Seed { tokens: rdl },
+        )
+}
+
+#[test]
+fn sqrt_price_matches_known_points() {
+    assert!(sqrt_price_x96(amount0: 1, amount1: 1) == Q96)
+    assert!(sqrt_price_x96(amount0: 1, amount1: 4) == 2 * Q96)
+    assert!(sqrt_price_x96(amount0: 4, amount1: 1) == Q96 / 2)
+    // A full sale: 80M RDL against 360 BNB, either way round.
+    let rdl: u256 = 80_000_000 * 1_000_000_000_000_000_000
+    let bnb: u256 = 360 * 1_000_000_000_000_000_000
+    let p = sqrt_price_x96(amount0: rdl, amount1: bnb)
+    let q = sqrt_price_x96(amount0: bnb, amount1: rdl)
+    // p * q is Q96 squared, give or take rounding.
+    assert!(p * q <= Q96 * Q96 && Q96 * Q96 - p * q < Q96 * 2_000_000)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn seed_mints_one_full_range_position() uses (evm: mut Evm) {
+    let (locker, token, wbnb, npm) = setup()
+    let rdl: u256 = 40_000_000 * 1_000_000_000_000_000_000
+    seed(locker, token, rdl, ether(180))
+
+    let (t0, t1, fee, price): (Address, Address, u256, u256) = evm
+        .call(
+            addr: npm,
+            gas: 100000,
+            value: Wei::zero(),
+            message: NpmViews::Pool {},
+        )
+    assert!(fee == FEE_TIER)
+    let rdl_first = token.word() < wbnb.word()
+    if rdl_first {
+        assert!(t0 == token && t1 == wbnb)
+        assert!(
+            price == sqrt_price_x96(amount0: rdl, amount1: ether(180).as_wei()),
+        )
+    } else {
+        assert!(t0 == wbnb && t1 == token)
+        assert!(
+            price == sqrt_price_x96(amount0: ether(180).as_wei(), amount1: rdl),
+        )
+    }
+    let (lower, upper): (i32, i32) = evm
+        .call(
+            addr: npm,
+            gas: 100000,
+            value: Wei::zero(),
+            message: NpmViews::Ticks {},
+        )
+    assert!(lower == TICK_LOWER && upper == TICK_UPPER)
+    let (_a0, _a1, recipient): (u256, u256, Address) = evm
+        .call(
+            addr: npm,
+            gas: 100000,
+            value: Wei::zero(),
+            message: NpmViews::Amounts {},
+        )
+    // The position belongs to the locker itself.
+    assert!(recipient == locker)
+    let id: u256 = evm
+        .call(
+            addr: locker,
+            gas: 100000,
+            value: Wei::zero(),
+            message: LockerViews::TokenId {},
+        )
+    assert!(id == 7)
+    // The BNB was wrapped.
+    let wrapped: u256 = evm
+        .call(
+            addr: wbnb,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::BalanceOf { account: locker },
+        )
+    assert!(wrapped == ether(180).as_wei())
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000)]
+fn seed_only_once() uses (evm: mut Evm) {
+    let (locker, token, _wbnb, _npm) = setup()
+    seed(locker, token, 1_000, ether(1))
+    seed(locker, token, 1_000, ether(1))
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000)]
+fn seed_only_from_ieo() uses (evm: mut Evm) {
+    let me = evm.address()
+    let token = evm.create2<Riddle>(
+            value: Wei::zero(),
+            args: (me, Address::new(MINING)),
+            salt: 1,
+        )
+    let wbnb = evm.create2<MockWbnb>(value: Wei::zero(), args: (), salt: 2)
+    let npm = evm.create2<MockNpm>(value: Wei::zero(), args: (), salt: 3)
+    let locker = evm
+        .create2<Locker>(
+            value: Wei::zero(),
+            args: (Address::new(0x1e0), token, wbnb, npm, Address::new(FEE_TO)),
+            salt: 4,
+        )
+    seed(locker, token, 1_000, ether(1))
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn fees_only_go_to_fee_to() uses (evm: mut Evm) {
+    let (locker, token, _wbnb, npm) = setup()
+    seed(locker, token, 1_000, ether(1))
+    let _: (u256, u256) = evm
+        .call(
+            addr: locker,
+            gas: 500000,
+            value: Wei::zero(),
+            message: LockerViews::CollectFees {},
+        )
+    let (id, to, max): (u256, Address, u256) = evm
+        .call(
+            addr: npm,
+            gas: 100000,
+            value: Wei::zero(),
+            message: NpmViews::Collected {},
+        )
+    assert!(id == 7 && to == Address::new(FEE_TO))
+    assert!(max == 0xffffffffffffffffffffffffffffffff)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn increase_adds_what_the_locker_holds() uses (evm: mut Evm) {
+    let (locker, token, wbnb, npm) = setup()
+    seed(locker, token, 1_000, ether(1))
+    // More RDL arrives, for example from the distributor.
+    let _: bool = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to: locker, amount: 500 },
+        )
+    let _: u256 = evm
+        .call(
+            addr: locker,
+            gas: 2000000,
+            value: Wei::zero(),
+            message: LockerViews::Increase {},
+        )
+    let (id, a0, a1): (u256, u256, u256) = evm
+        .call(
+            addr: npm,
+            gas: 100000,
+            value: Wei::zero(),
+            message: NpmViews::Increased {},
+        )
+    assert!(id == 7)
+    // The mock never pulls, so the locker still holds the seed plus the 500.
+    let rdl_first = token.word() < wbnb.word()
+    if rdl_first {
+        assert!(a0 == 1_500 && a1 == ether(1).as_wei())
+    } else {
+        assert!(a1 == 1_500 && a0 == ether(1).as_wei())
+    }
+}
