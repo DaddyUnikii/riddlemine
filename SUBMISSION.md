@@ -132,8 +132,8 @@ fixed in PR #9 and the record is kept in
 - **AI assistance:** built with an AI agent (Hark) as pair programmer. The
   agent drafted most of the Fe code, tests, scripts and docs from my design
   decisions, and ran the testnet deploy. I chose the mechanics (IEO modes,
-  tax curve, boost, voucher, distributor split), reviewed and merged every
-  PR, and funded the testnet deployer.
+  tax curve, boost, voucher, distributor split), approved every PR before
+  it was merged, and funded the testnet deployer.
 
 ## Team
 
