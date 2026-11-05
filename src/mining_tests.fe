@@ -21,6 +21,13 @@ const E18: u256 = 1_000_000_000_000_000_000
 const ANSWER: u256 = 0x3dbff9d
 const OTHER_ANSWER: u256 = 0xdf7fb2c
 const DAY: u256 = 86_400
+// Test bot key: keccak("riddlemine-test-bot"); signatures from scripts/voucher.py
+// for the test runner 0xbd77...8eb1 on chain 1.
+const BOT: u256 = 0x2e54a08282ae82d0f5efabf8e3c6f05286433df3
+const V0_R: u256 = 0xfe58eb8b37e4e5d8dab51aace9f9caeb981661873aae7ca38419afef70752e44
+const V0_S: u256 = 0x5fbda2ae6f253c993f4d9ceb3ecdee0a9b2408ef626e8439287f4e939c7dbe8b
+const V1_R: u256 = 0x2634afeb62136a3865fa10219f7d371293dee9cd18002e18732f1543c3952856
+const V1_S: u256 = 0x19e1ec5f8f7d3fb35d522da037c860cf7a1d74f6955fe00c52fb2c25960fe442
 
 /// IEO stand-in: a settable locked stake per wallet.
 pub msg MockIeoMsg {
@@ -50,7 +57,12 @@ fn setup(_ lock: Duration, _ vest: Duration, _ stake: u256) -> (Address, Address
 uses (evm: mut Evm)
 {
     let ieo = evm.create2<MockIeo>(value: Wei::zero(), args: (), salt: 1)
-    let mining = evm.create2<Mining>(value: Wei::zero(), args: (ieo, 60, lock, vest), salt: 2)
+    let mining = evm
+        .create2<Mining>(
+            value: Wei::zero(),
+            args: (ieo, 60, lock, vest, Address::new(BOT)),
+            salt: 2,
+        )
     let me = evm.address()
     let token = evm
         .create2<Riddle>(
@@ -122,10 +134,16 @@ fn stake_requirement_grows_and_caps() {
 
 #[test]
 fn boost_is_linear_up_to_2x() {
-    assert!(boost_bps(locked: 0) == BPS)
-    assert!(boost_bps(locked: 250_000 * E18) == 15_000)
-    assert!(boost_bps(locked: 500_000 * E18) == 20_000)
-    assert!(boost_bps(locked: 5_000_000 * E18) == 20_000)
+    assert!(boost_bps(locked: 0, tweeted: false) == BPS)
+    assert!(boost_bps(locked: 250_000 * E18, tweeted: false) == 15_000)
+    assert!(boost_bps(locked: 500_000 * E18, tweeted: false) == 20_000)
+    assert!(
+        boost_bps(locked: 5_000_000 * E18, tweeted: false) == 20_000,
+    )
+    // The tweet adds 10%, and the total stays at 2x.
+    assert!(boost_bps(locked: 0, tweeted: true) == 11_000)
+    assert!(boost_bps(locked: 450_000 * E18, tweeted: true) == 20_000)
+    assert!(boost_bps(locked: 500_000 * E18, tweeted: true) == 20_000)
 }
 
 #[test]
@@ -268,4 +286,44 @@ fn pool_excludes_stakes_and_unpaid_rewards() uses (evm: mut Evm) {
             message: MiningMsg::Available {},
         )
     assert!(left == 820_000_000 * E18 - reward)
+}
+
+fn redeem(_ mining: Address, _ day: u256, _ v: u8, _ r: u256, _ s: u256) -> bool
+uses (evm: mut Evm)
+{
+    evm.call(
+        addr: mining,
+        gas: 200000,
+        value: Wei::zero(),
+        message: MiningMsg::RedeemVoucher { day, v, r, s },
+    )
+}
+
+#[test]
+fn todays_tweet_voucher_adds_10_percent() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    assert!(redeem(mining, 0, 28, V0_R, V0_S))
+    let has: bool = evm
+        .call(
+            addr: mining,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MiningMsg::HasVoucher { who: evm.address() },
+        )
+    assert!(has)
+    let reward = submit(mining, ANSWER)
+    assert!(reward == base_reward() * 11 / 10)
+}
+
+#[test(should_revert)]
+fn a_voucher_for_another_day_is_refused() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    let _ = redeem(mining, 1, 27, V1_R, V1_S)
+}
+
+#[test(should_revert)]
+fn a_voucher_for_another_miner_is_refused() uses (evm: mut Evm) {
+    let (mining, _token, _ieo) = setup(Duration::zero(), Duration::zero(), 2_500 * E18)
+    // Day 1's signature replayed as day 0 recovers some other address.
+    let _ = redeem(mining, 0, 27, V1_R, V1_S)
 }
