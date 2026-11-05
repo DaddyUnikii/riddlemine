@@ -15,5 +15,33 @@
   "txs": {
     "finalize": "0xc215a7477ae9c40be391ebc46b74e30022f51c40355d00a928447d837196c34f",
     "launch": "0x5857bbf0abfea62765c19b5f84e730486a1431fed77ddc150525022677de53f5"
+  },
+  "miningDemo": {
+    "miner": "0xC9B2f83C68c6EC17c8b1a50AadC7a65F5744b4Be",
+    "buy": "0xecf8c31b34b219543b8b3c6bb7586732d4dbfecfc9cab70dc6facaed970db2b0",
+    "rdl_bought": 42070.03904006393,
+    "stake": "0x7ff2495b97ec35001924c1f63e3da193f9736a32dc2eb7437cb5d10ad139d7e6",
+    "voucher": "0x9d8833a36af16f49915b750aad32f8e3f8b8ec1776c9530284b7dc297b98b84b",
+    "boost_bps": 20000,
+    "wins": [
+      {
+        "round": 14,
+        "mask": "0x2f6fecc",
+        "tx": "0xd2724937fe4312167dbef53b896a804bb039034da2efe846f5095b726a6f935f"
+      },
+      {
+        "round": 15,
+        "mask": "0x6521ce",
+        "tx": "0x4e1ac7ec60410f57d5bdd376242123f58738bfc6f521e6e054629fc0dd685ea9"
+      },
+      {
+        "round": 16,
+        "mask": "0x37ee8e",
+        "tx": "0xf56833a06fc5e2833243700f5cb6dd3960f74f34c2da3d868940ae604cad4345"
+      }
+    ],
+    "vesting": 468.0262974691879,
+    "claimable": 0.010232211177380697,
+    "roundReward": 780.0608828006089
   }
 }
