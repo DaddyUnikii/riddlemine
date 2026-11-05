@@ -9,7 +9,7 @@ round's emission. A bid-or-slot IEO funds a collect-only LP position, IEO
 stakes are non-transferable and boost mining, and the trade tax decays from
 5% to 1% with no owner setter.
 
-Work in progress, built in small PRs.
+Built in small PRs. The submission write-up is in [SUBMISSION.md](SUBMISSION.md).
 
 ## Status
 
@@ -22,7 +22,7 @@ Work in progress, built in small PRs.
 | Mining: subset-sum riddle per 60 s round, stake gate, IEO boost up to 2x, halving emission, 30-day vesting | `src/mining.fe`, `scripts/solve.py` | done |
 | Distributor: tax + LP fees split every 3 days (25% burn, 25% LP, 50% dev, dev share to miners once the pool is dry) | `src/distributor.fe` | done |
 | Tweet voucher: bot-signed daily voucher, +10% boost, total capped at 2x | `src/mining.fe`, `scripts/voucher.py` | done |
-| BSC testnet deploy, demo | | next |
+| BSC testnet deploy and demo (sale, launch, mining) | `scripts/`, `deployments/` | done |
 
 | Allocation | Share | Amount |
 | --- | --- | --- |
