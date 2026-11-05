@@ -13,7 +13,7 @@ pub const MINING_SHARE: u256 = 820_000_000_000_000_000_000_000_000
 // 82%
 const MAX_U256: u256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
 
-msg Erc20 {
+pub msg Erc20 {
     #[selector = sol("name()")]
     Name -> String<10>,
     #[selector = sol("symbol()")]

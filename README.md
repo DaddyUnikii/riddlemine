@@ -17,7 +17,8 @@ Work in progress, built in small PRs.
 | --- | --- | --- |
 | RDL token (fixed supply, no owner) | `src/lib.fe` | done |
 | IEO: bid mode (sqrt-weighted, refunds) and slot mode, soft cap, batched refunds | `src/ieo.fe` | done |
-| Launch, LP locker, IEO stake unlock | | next |
+| Launch (LP seed, leftover burn/mining/bonus), dev pull, IEO stake unlock and early exit | `src/ieo.fe` | done |
+| LP locker (PancakeSwap v3, collect-only) | | next |
 | Mining (subset-sum rounds), boosts, vesting | | planned |
 | Trade tax, `distribute()` | | planned |
 

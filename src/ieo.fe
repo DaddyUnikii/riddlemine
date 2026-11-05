@@ -13,10 +13,23 @@
 // - under 50%: every buyer gets 90% back, 10% goes to the dev.
 // Refunds are pushed in permissionless batches (`settle`), and any push that
 // fails falls back to a pull (`claimRefund`), so one stubborn receiver can
-// never block the rest. Launch, the LP and the IEO stake live in the next PRs.
+// never block the rest.
+//
+// After a successful sale, `launch()` (permissionless):
+// - sends 90% of the BNB raised and an LP share of RDL to the LP locker, the
+//   RDL scaled by how much of the sale sold so the pool opens at the same
+//   price whatever the fill (full sale: 80M RDL against 360 BNB);
+// - leaves 10% of the BNB for the dev to pull with `claimDev`;
+// - splits every unsold or unused RDL: 50% burned, 25% to the mining pool,
+//   25% as a bonus to buyers pro rata to their allocation.
+// Bought RDL stays here as a non-transferable IEO stake that the mining
+// contract reads as a boost. 10% unlocks every `unlock_step` (10 days in
+// production); `exitEarly()` takes everything now and forfeits half of the
+// locked part to the mining pool.
 
 use core::num::isqrt
 use std::evm::StorageMap
+use ingot::Erc20
 
 pub const MODE_BID: u8 = 0
 pub const MODE_SLOT: u8 = 1
@@ -48,6 +61,18 @@ pub const SLOT_STEP: u256 = 100_000_000_000
 // Refund share when the sale fails, in basis points.
 pub const FAIL_REFUND_BPS: u256 = 9_000
 
+pub const LP_TOKENS: u256 = 80_000_000 * E18
+pub const LP_BNB_BPS: u256 = 9_000
+pub const DEAD: u256 = 0xdead
+pub const UNLOCK_STEPS: u256 = 10
+
+/// What the IEO calls on the LP locker at launch. The locker receives the RDL
+/// by transfer first, then this call carries the BNB.
+pub msg LockerMsg {
+    #[selector = sol("seed(uint256)")]
+    Seed { tokens: u256 } -> bool,
+}
+
 pub msg IeoMsg {
     #[selector = sol("bid()")]
     Bid -> u256,
@@ -59,8 +84,8 @@ pub msg IeoMsg {
     Settle { max: u256 } -> u256,
     #[selector = sol("claimRefund(address)")]
     ClaimRefund { to: Address } -> Wei,
-    #[selector = sol("claimDevOnFailure()")]
-    ClaimDevOnFailure -> Wei,
+    #[selector = sol("claimDev(address)")]
+    ClaimDev { to: Address } -> Wei,
     #[selector = sol("slotCost(uint256)")]
     SlotCost { count: u256 } -> u256,
     #[selector = sol("mode()")]
@@ -87,6 +112,22 @@ pub msg IeoMsg {
     PendingRefund { who: Address } -> u256,
     #[selector = sol("raised()")]
     Raised -> u256,
+    #[selector = sol("bind(address,address)")]
+    Bind { token: Address, locker: Address } -> bool,
+    #[selector = sol("launch()")]
+    Launch -> u256,
+    #[selector = sol("withdraw(uint256)")]
+    Withdraw { amount: u256 } -> u256,
+    #[selector = sol("exitEarly()")]
+    ExitEarly -> u256,
+    #[selector = sol("stakeOf(address)")]
+    StakeOf { who: Address } -> u256,
+    #[selector = sol("lockedStake(address)")]
+    LockedStake { who: Address } -> u256,
+    #[selector = sol("withdrawable(address)")]
+    Withdrawable { who: Address } -> u256,
+    #[selector = sol("launched()")]
+    Launched -> bool,
     #[selector = sol("soldTokens()")]
     SoldTokens -> u256,
 }
@@ -109,6 +150,24 @@ struct SlotsBought {
 
 #[event]
 struct Finalized { state: u8, total_in: u256 }
+
+#[event]
+struct Launched {
+    lp_bnb: u256,
+    lp_tokens: u256,
+    dev_bnb: u256,
+    burned: u256,
+    to_mining: u256,
+    bonus: u256,
+}
+
+#[event]
+struct StakeWithdrawn {
+    #[indexed]
+    who: Address,
+    amount: u256,
+    penalty: u256,
+}
 
 #[event]
 struct Settled {
@@ -151,7 +210,15 @@ struct Book {
     cursor: u256,
     raised: u256,
     sold_tokens: u256,
-    dev_claimed: bool,
+    dev_owed: u256,
+    mining: Address,
+    locker: Address,
+    token: Address,
+    unlock_step: Duration,
+    launched: bool,
+    launch_time: Timestamp,
+    bonus_pool: u256,
+    withdrawn: StorageMap<Address, u256>,
     buyers: StorageMap<u256, Address>,
     contributed: StorageMap<Address, u256>,
     slots: StorageMap<Address, u256>,
@@ -170,14 +237,20 @@ fn add_buyer(who: Address) uses (book: mut Book) {
 pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
     mut book: Book,
 
-    /// `duration` is the sale length (10 days in production).
-    init(mode: u8, duration: Duration, dev: Address)
+    /// `duration` is the sale length and `unlock_step` the stake unlock step
+    /// (both 10 days in production).
+    init(mode: u8, duration: Duration, dev: Address, mining: Address, unlock_step: Duration)
     uses (ctx, mut book)
     {
         assert!(mode == MODE_BID || mode == MODE_SLOT, "bad mode")
-        assert!(dev != Address::zero(), "zero dev")
+        assert!(
+            dev != Address::zero() && mining != Address::zero(),
+            "zero address",
+        )
         book.mode = mode
         book.dev = dev
+        book.mining = mining
+        book.unlock_step = unlock_step
         book.end = ctx.timestamp() + duration
     }
 
@@ -241,6 +314,9 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 book.slots_sold * 2 >= SLOTS
             }
             book.state = if ok { STATE_SETTLING } else { STATE_FAILED }
+            if !ok {
+                book.dev_owed = book.total_in - book.total_in * FAIL_REFUND_BPS / 10_000
+            }
             log.emit(Finalized { state: book.state, total_in: book.total_in })
             book.state
         }
@@ -313,19 +389,125 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
             wei_of(amount)
         }
 
-        /// On a failed sale the dev keeps 10% of what came in.
-        ClaimDevOnFailure -> Wei uses (mut call, mut book) {
-            assert!(book.state == STATE_FAILED, "sale did not fail")
-            assert!(!book.dev_claimed, "already claimed")
-            book.dev_claimed = true
-            let amount = book.total_in - book.total_in * FAIL_REFUND_BPS / 10_000
+        /// The dev pulls its 10%: of the raise after launch, or of everything
+        /// that came in after a failed sale.
+        ClaimDev { to } -> Wei uses (ctx, mut call, mut book) {
+            assert!(ctx.caller() == book.dev, "only dev")
+            let amount = book.dev_owed
+            assert!(amount > 0, "nothing owed")
+            book.dev_owed = 0
             assert!(
-                call.send_value(addr: book.dev, gas: 0, value: wei_of(amount)).success(),
+                call.send_value(addr: to, gas: 0, value: wei_of(amount)).success(),
                 "transfer failed",
             )
             wei_of(amount)
         }
 
+        /// The token and the LP locker are deployed after the IEO (the token
+        /// mints to this address), so the dev binds both once, and only if all
+        /// 180M RDL arrived here.
+        Bind { token, locker } -> bool uses (ctx, mut call, mut book) {
+            assert!(ctx.caller() == book.dev, "only dev")
+            assert!(book.token == Address::zero(), "already bound")
+            assert!(locker != Address::zero(), "zero locker")
+            book.locker = locker
+            let bal: u256 = call
+                .call(
+                    addr: token,
+                    gas: 100000,
+                    value: Wei::zero(),
+                    message: Erc20::BalanceOf { account: ctx.address() },
+                )
+            assert!(bal == IEO_TOKENS + LP_TOKENS, "token not funded")
+            book.token = token
+            true
+        }
+
+        Launch -> u256 uses (ctx, mut call, mut book, mut log) {
+            assert!(book.state == STATE_SUCCESS, "sale not settled")
+            assert!(!book.launched, "already launched")
+            assert!(book.token != Address::zero(), "token not bound")
+            book.launched = true
+            book.launch_time = ctx.timestamp()
+
+            let lp_bnb = book.raised * LP_BNB_BPS / 10_000
+            let dev_bnb = book.raised - lp_bnb
+            let lp_tokens = LP_TOKENS * book.sold_tokens / IEO_TOKENS
+            let leftover = IEO_TOKENS + LP_TOKENS - book.sold_tokens - lp_tokens
+            let burned = leftover / 2
+            let to_mining = leftover / 4
+            let bonus = if book.sold_tokens == 0 {
+                0
+            } else {
+                leftover - burned - to_mining
+            }
+            book.bonus_pool = bonus
+            let burn_all = leftover - to_mining - bonus
+
+            send_tokens(book.token, to: book.locker, amount: lp_tokens)
+            send_tokens(book.token, to: Address::new(DEAD), amount: burn_all)
+            send_tokens(book.token, to: book.mining, amount: to_mining)
+            let seeded: bool = call
+                .call(
+                    addr: book.locker,
+                    gas: 500000,
+                    value: wei_of(lp_bnb),
+                    message: LockerMsg::Seed { tokens: lp_tokens },
+                )
+            assert!(seeded, "locker refused")
+            book.dev_owed = dev_bnb
+
+            log.emit(
+                Launched { lp_bnb, lp_tokens, dev_bnb, burned: burn_all, to_mining, bonus },
+            )
+            lp_tokens
+        }
+
+        Withdraw { amount } -> u256 uses (ctx, mut call, mut book, mut log) {
+            let who = ctx.caller()
+            assert!(
+                amount > 0 && amount <= withdrawable(who),
+                "more than unlocked",
+            )
+            book.withdrawn.set(key: who, value: book.withdrawn.get(key: who) + amount)
+            send_tokens(book.token, to: who, amount)
+            log.emit(StakeWithdrawn { who, amount, penalty: 0 })
+            amount
+        }
+
+        /// Leave now: the unlocked part in full, half of the locked part, and
+        /// the other half to the mining pool.
+        ExitEarly -> u256 uses (ctx, mut call, mut book, mut log) {
+            let who = ctx.caller()
+            let free = withdrawable(who)
+            let locked = locked_stake(who)
+            assert!(free + locked > 0, "no stake")
+            let penalty = locked / 2
+            let out = free + locked - penalty
+            book.withdrawn.set(
+                    key: who,
+                    value: book.withdrawn.get(key: who) + free + locked,
+                )
+            send_tokens(book.token, to: who, amount: out)
+            if penalty > 0 {
+                send_tokens(book.token, to: book.mining, amount: penalty)
+            }
+            log.emit(StakeWithdrawn { who, amount: out, penalty })
+            out
+        }
+
+        StakeOf { who } -> u256 uses book {
+            stake_of(who) - book.withdrawn.get(key: who)
+        }
+        LockedStake { who } -> u256 uses (ctx, book) {
+            locked_stake(who)
+        }
+        Withdrawable { who } -> u256 uses (ctx, book) {
+            withdrawable(who)
+        }
+        Launched -> bool uses book {
+            book.launched
+        }
         SlotCost { count } -> u256 uses book {
             slot_cost(sold: book.slots_sold, count)
         }
@@ -373,4 +555,55 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
 
 fn wei_of(_ n: u256) -> Wei {
     std::evm::wei(n)
+}
+
+fn send_tokens(_ token: Address, to: Address, amount: u256)
+uses (call: mut Call)
+{
+    if amount > 0 {
+        let ok: bool = call
+            .call(
+                addr: token,
+                gas: 100000,
+                value: Wei::zero(),
+                message: Erc20::Transfer { to, amount },
+            )
+        assert!(ok, "token transfer failed")
+    }
+}
+
+/// Allocation plus the buyer's share of the launch bonus.
+fn stake_of(_ who: Address) -> u256 uses (book: Book) {
+    let alloc = book.allocation.get(key: who)
+    if !book.launched || book.sold_tokens == 0 {
+        return alloc
+    }
+    alloc + book.bonus_pool * alloc / book.sold_tokens
+}
+
+/// Stake that has unlocked so far and is not yet withdrawn.
+fn withdrawable(_ who: Address) -> u256 uses (ctx: Ctx, book: Book) {
+    if !book.launched { return 0 }
+    let total = stake_of(who)
+    let step = book.unlock_step.as_seconds()
+    var steps: u256 = UNLOCK_STEPS
+    if step > 0 {
+        steps = (ctx.timestamp() - book.launch_time).as_seconds() / step
+        if steps > UNLOCK_STEPS {
+            steps = UNLOCK_STEPS
+        }
+    }
+    let unlocked = total * steps / UNLOCK_STEPS
+    let taken = book.withdrawn.get(key: who)
+    if unlocked > taken {
+        unlocked - taken
+    } else {
+        0
+    }
+}
+
+/// Stake still locked: what the mining contract counts as the IEO boost.
+fn locked_stake(_ who: Address) -> u256 uses (ctx: Ctx, book: Book) {
+    let left = stake_of(who) - book.withdrawn.get(key: who)
+    left - withdrawable(who)
 }
