@@ -1,9 +1,11 @@
 // IEO tests. Sales are deployed with a zero duration, so bids are accepted
 // and the sale can be finalized in the same block.
 
+use ingot::{Riddle, Erc20}
 use ingot::ieo::{
     Ieo,
     IeoMsg,
+    LockerMsg,
     MODE_BID,
     MODE_SLOT,
     STATE_FAILED,
@@ -16,11 +18,10 @@ use ingot::ieo::{
     bid_allocation,
     slot_cost,
 }
-use std::evm::{ether, wei}
+use std::evm::{ether, wei, SECOND}
 
-const DEV: u256 = 0xde5
-const BIG: u256 = 1_000_000_000_000_000_000_000_000
-// 1M ether
+const MINING: u256 = 0x313
+const DAY: u256 = 86_400
 
 /// A stand-in buyer: holds BNB, bids through the IEO and has no receive
 /// function, so pushed refunds to it fail and fall back to claimRefund.
@@ -31,6 +32,10 @@ msg BuyerMsg {
     DoSlots { ieo: Address, count: u256, cost: u256 } -> u256,
     #[selector = 0x12]
     DoClaim { ieo: Address, to: Address } -> Wei,
+    #[selector = 0x13]
+    DoWithdraw { ieo: Address, amount: u256 } -> u256,
+    #[selector = 0x14]
+    DoExit { ieo: Address } -> u256,
 }
 
 pub contract Buyer uses (call: mut Call) {
@@ -63,14 +68,92 @@ pub contract Buyer uses (call: mut Call) {
                 message: IeoMsg::ClaimRefund { to },
             )
         }
+        DoWithdraw { ieo, amount } -> u256 uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 300000,
+                value: Wei::zero(),
+                message: IeoMsg::Withdraw { amount },
+            )
+        }
+        DoExit { ieo } -> u256 uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 300000,
+                value: Wei::zero(),
+                message: IeoMsg::ExitEarly {},
+            )
+        }
     }
 }
 
-fn sale(_ mode: u8) -> Address uses (evm: mut Evm) {
+/// Stand-in dev wallet, a contract so tests can act as the dev.
+msg DevMsg {
+    #[selector = 0x20]
+    DoBind { ieo: Address, token: Address, locker: Address } -> bool,
+    #[selector = 0x21]
+    DoClaimDev { ieo: Address, to: Address } -> Wei,
+}
+
+pub contract Dev uses (call: mut Call) {
+    recv DevMsg {
+        DoBind { ieo, token, locker } -> bool uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 200000,
+                value: Wei::zero(),
+                message: IeoMsg::Bind { token, locker },
+            )
+        }
+        DoClaimDev { ieo, to } -> Wei uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 200000,
+                value: Wei::zero(),
+                message: IeoMsg::ClaimDev { to },
+            )
+        }
+    }
+}
+
+/// Stand-in LP locker: takes the BNB and remembers the RDL amount.
+pub contract MockLocker {
+    mut seeded_tokens: u256,
+
+    recv LockerMsg {
+        #[payable]
+        Seed { tokens } -> bool uses (mut seeded_tokens) {
+            seeded_tokens = tokens
+            true
+        }
+    }
+}
+
+fn dev() -> Address uses (evm: mut Evm) {
+    evm.create2<Dev>(value: Wei::zero(), args: (), salt: 9)
+}
+
+fn sale_with(_ mode: u8, _ d: Address, _ step: Duration) -> Address
+uses (evm: mut Evm)
+{
     evm.create2<Ieo>(
         value: Wei::zero(),
-        args: (mode, Duration::zero(), Address::new(DEV)),
+        args: (mode, Duration::zero(), d, Address::new(MINING), step),
         salt: 0,
+    )
+}
+
+fn sale(_ mode: u8) -> Address uses (evm: mut Evm) {
+    let d = dev()
+    sale_with(mode, d, Duration::zero())
+}
+
+fn tokens_of(_ token: Address, _ who: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: who },
     )
 }
 
@@ -123,6 +206,49 @@ fn settle_all(_ ieo: Address) uses (evm: mut Evm) {
             )
         left = n - done
     }
+}
+
+/// 100 buyers at 2 BNB: exactly half sold. Returns (ieo, token, locker, dev, first buyer).
+fn settled_sale(_ step: Duration) -> (Address, Address, Address, Address, Address)
+uses (evm: mut Evm)
+{
+    let d = dev()
+    let locker = evm.create2<MockLocker>(value: Wei::zero(), args: (), salt: 7)
+    let ieo = sale_with(MODE_BID, d, step)
+    let first = buyer(0, ether(2))
+    bid_via(first, ieo, ether(2).as_wei())
+    var i: u256 = 1
+    while i < 100 {
+        let b = buyer(i, ether(2))
+        bid_via(b, ieo, ether(2).as_wei())
+        i += 1
+    }
+    let _: u8 = finalize(ieo)
+    settle_all(ieo)
+    let token = evm.create2<Riddle>(
+            value: Wei::zero(),
+            args: (ieo, Address::new(MINING)),
+            salt: 8,
+        )
+    (ieo, token, locker, d, first)
+}
+
+fn launch(_ ieo: Address, _ token: Address, _ locker: Address, _ d: Address)
+uses (evm: mut Evm)
+{
+    let _: bool = evm
+        .call(
+            addr: d,
+            gas: 400000,
+            value: Wei::zero(),
+            message: DevMsg::DoBind { ieo, token, locker },
+        )
+    let _: u256 = evm.call(
+            addr: ieo,
+            gas: 3000000,
+            value: Wei::zero(),
+            message: IeoMsg::Launch {},
+        )
 }
 
 #[test]
@@ -187,7 +313,8 @@ fn bid_above_cap_reverts() uses (evm: mut Evm) {
 
 #[test(balance = 1_000_000_000_000_000_000_000_000)]
 fn failed_bid_sale_refunds_90_percent() uses (evm: mut Evm) {
-    let ieo = sale(MODE_BID)
+    let d = dev()
+    let ieo = sale_with(MODE_BID, d, Duration::zero())
     let b = buyer(1, ether(1))
     bid_via(b, ieo, ether(1).as_wei())
     assert!(finalize(ieo) == STATE_FAILED)
@@ -212,17 +339,15 @@ fn failed_bid_sale_refunds_90_percent() uses (evm: mut Evm) {
         )
     assert!(evm.balance(payee) == wei(900_000_000_000_000_000))
 
-    let dev: Wei = evm
+    let dev_to = Address::new(0xd0)
+    let _: Wei = evm
         .call(
-            addr: ieo,
-            gas: 100000,
+            addr: d,
+            gas: 300000,
             value: Wei::zero(),
-            message: IeoMsg::ClaimDevOnFailure {},
+            message: DevMsg::DoClaimDev { ieo, to: dev_to },
         )
-    assert!(dev == wei(100_000_000_000_000_000))
-    assert!(
-        evm.balance(Address::new(DEV)) == wei(100_000_000_000_000_000),
-    )
+    assert!(evm.balance(dev_to) == wei(100_000_000_000_000_000))
 }
 
 #[test(balance = 1_000_000_000_000_000_000_000_000)]
@@ -369,4 +494,123 @@ fn slot_sale_rejects_wrong_value() uses (evm: mut Evm) {
 fn constants_line_up() {
     assert!(TOKENS_PER_SLOT * 50_000 == IEO_TOKENS)
     assert!(TARGET * RATE == IEO_TOKENS)
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000_000)]
+fn only_dev_binds_token() uses (evm: mut Evm) {
+    let ieo = sale(MODE_BID)
+    let token = evm.create2<Riddle>(
+            value: Wei::zero(),
+            args: (ieo, Address::new(MINING)),
+            salt: 8,
+        )
+    let _: bool = evm
+        .call(
+            addr: ieo,
+            gas: 200000,
+            value: Wei::zero(),
+            message: IeoMsg::Bind { token, locker: Address::new(0x10c) },
+        )
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000_000)]
+fn launch_needs_bound_token() uses (evm: mut Evm) {
+    let (ieo, _token, _locker, _d, _first) = settled_sale(Duration::zero())
+    let _: u256 = evm.call(
+            addr: ieo,
+            gas: 3000000,
+            value: Wei::zero(),
+            message: IeoMsg::Launch {},
+        )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn launch_seeds_lp_and_splits_leftovers() uses (evm: mut Evm) {
+    let (ieo, token, locker, d, first) = settled_sale(Duration::zero())
+    launch(ieo, token, locker, d)
+    let m: u256 = 1_000_000_000_000_000_000_000_000 // 1M RDL
+
+    // Half sold: 40M RDL and 180 BNB to the LP, the same price as the sale.
+    assert!(tokens_of(token, locker) == 40 * m)
+    assert!(evm.balance(locker) == ether(180))
+    // Leftover 90M: 45M burned, 22.5M to mining on top of its 820M, 22.5M bonus.
+    assert!(tokens_of(token, Address::new(0xdead)) == 45 * m)
+    assert!(tokens_of(token, Address::new(MINING)) == 842 * m + m / 2)
+    // A 2 BNB buyer: 500k RDL plus 1% of the bonus is 725k.
+    let stake: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::StakeOf { who: first },
+        )
+    assert!(stake == 725_000 * 1_000_000_000_000_000_000)
+
+    // The dev pulls its 20 BNB.
+    let dev_to = Address::new(0xd0)
+    let _: Wei = evm
+        .call(
+            addr: d,
+            gas: 300000,
+            value: Wei::zero(),
+            message: DevMsg::DoClaimDev { ieo, to: dev_to },
+        )
+    assert!(evm.balance(dev_to) == ether(20))
+
+    // Unlock step 0 means everything is unlocked: withdraw it all.
+    let _: u256 = evm
+        .call(
+            addr: first,
+            gas: 500000,
+            value: Wei::zero(),
+            message: BuyerMsg::DoWithdraw { ieo, amount: stake },
+        )
+    assert!(tokens_of(token, first) == stake)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn early_exit_forfeits_half_of_locked_stake() uses (evm: mut Evm) {
+    let (ieo, token, locker, d, first) = settled_sale(SECOND * (10 * DAY))
+    launch(ieo, token, locker, d)
+    let locked: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::LockedStake { who: first },
+        )
+    assert!(locked == 725_000 * 1_000_000_000_000_000_000)
+    let mining_before = tokens_of(token, Address::new(MINING))
+    let _: u256 = evm
+        .call(
+            addr: first,
+            gas: 500000,
+            value: Wei::zero(),
+            message: BuyerMsg::DoExit { ieo },
+        )
+    assert!(tokens_of(token, first) == locked / 2)
+    assert!(
+        tokens_of(token, Address::new(MINING)) == mining_before + locked / 2,
+    )
+    let left: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::StakeOf { who: first },
+        )
+    assert!(left == 0)
+}
+
+#[test(should_revert, balance = 1_000_000_000_000_000_000_000_000)]
+fn locked_stake_cannot_be_withdrawn() uses (evm: mut Evm) {
+    let (ieo, token, locker, d, first) = settled_sale(SECOND * (10 * DAY))
+    launch(ieo, token, locker, d)
+    let _: u256 = evm
+        .call(
+            addr: first,
+            gas: 500000,
+            value: Wei::zero(),
+            message: BuyerMsg::DoWithdraw { ieo, amount: 1 },
+        )
 }
