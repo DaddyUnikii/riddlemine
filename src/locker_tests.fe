@@ -178,9 +178,16 @@ pub contract MockNpm {
 /// Returns (locker, token, wbnb, npm), with the runner as the IEO.
 fn setup() -> (Address, Address, Address, Address) uses (evm: mut Evm) {
     let me = evm.address()
-    let token = evm.create2<Riddle>(
+    let token = evm
+        .create2<Riddle>(
             value: Wei::zero(),
-            args: (me, Address::new(MINING)),
+            args: (
+                me,
+                Address::new(MINING),
+                Address::new(0xd15),
+                Address::new(0xb0b),
+                Address::new(0x9a1),
+            ),
             salt: 1,
         )
     let wbnb = evm.create2<MockWbnb>(value: Wei::zero(), args: (), salt: 2)
@@ -299,9 +306,16 @@ fn seed_only_once() uses (evm: mut Evm) {
 #[test(should_revert, balance = 1_000_000_000_000_000_000_000)]
 fn seed_only_from_ieo() uses (evm: mut Evm) {
     let me = evm.address()
-    let token = evm.create2<Riddle>(
+    let token = evm
+        .create2<Riddle>(
             value: Wei::zero(),
-            args: (me, Address::new(MINING)),
+            args: (
+                me,
+                Address::new(MINING),
+                Address::new(0xd15),
+                Address::new(0xb0b),
+                Address::new(0x9a1),
+            ),
             salt: 1,
         )
     let wbnb = evm.create2<MockWbnb>(value: Wei::zero(), args: (), salt: 2)

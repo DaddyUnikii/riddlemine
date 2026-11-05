@@ -1,0 +1,77 @@
+// Trade tax tests. The runner holds the IEO share and trades against the
+// computed pool address.
+
+use ingot::{Riddle, Erc20, pool_address, tax_bps}
+
+const E18: u256 = 1_000_000_000_000_000_000
+const MINING: u256 = 0x313
+const DIST: u256 = 0xd15
+const WBNB: u256 = 0xb0b
+
+fn deploy(_ npm: Address) -> Address uses (evm: mut Evm) {
+    evm.create2<Riddle>(
+        value: Wei::zero(),
+        args: (evm.address(), Address::new(MINING), Address::new(DIST), Address::new(WBNB), npm),
+        salt: 7,
+    )
+}
+
+fn balance(_ token: Address, _ who: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: who },
+    )
+}
+
+fn send(_ token: Address, _ to: Address, _ amount: u256) uses (evm: mut Evm) {
+    let _: bool = evm
+        .call(
+            addr: token,
+            gas: 200000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to, amount },
+        )
+}
+
+#[test]
+fn tax_falls_from_5_to_1_percent_over_30_days() {
+    assert!(tax_bps(elapsed: 0) == 500)
+    assert!(tax_bps(elapsed: 1_296_000) == 300)
+    assert!(tax_bps(elapsed: 2_592_000) == 100)
+    assert!(tax_bps(elapsed: 100_000_000) == 100)
+}
+
+#[test]
+fn selling_to_the_pool_pays_the_tax() uses (evm: mut Evm) {
+    let token = deploy(Address::new(0x9a1))
+    let pool = pool_address(token, wbnb: Address::new(WBNB))
+    send(token, pool, 1_000 * E18)
+    assert!(balance(token, pool) == 950 * E18)
+    assert!(balance(token, Address::new(DIST)) == 50 * E18)
+}
+
+#[test]
+fn plain_transfers_are_untaxed() uses (evm: mut Evm) {
+    let token = deploy(Address::new(0x9a1))
+    send(token, Address::new(0xabc), 1_000 * E18)
+    assert!(balance(token, Address::new(0xabc)) == 1_000 * E18)
+    assert!(balance(token, Address::new(DIST)) == 0)
+}
+
+#[test]
+fn liquidity_moved_by_the_position_manager_is_untaxed() uses (evm: mut Evm) {
+    // The runner stands in for the position manager here.
+    let token = deploy(evm.address())
+    let pool = pool_address(token, wbnb: Address::new(WBNB))
+    send(token, pool, 1_000 * E18)
+    assert!(balance(token, pool) == 1_000 * E18)
+}
+
+#[test]
+fn pool_address_does_not_depend_on_argument_order() {
+    let a = pool_address(token: Address::new(0x1234), wbnb: Address::new(WBNB))
+    let b = pool_address(token: Address::new(WBNB), wbnb: Address::new(0x1234))
+    assert!(a == b)
+}

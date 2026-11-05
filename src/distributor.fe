@@ -1,0 +1,204 @@
+// Riddlemine distributor: receives the trade tax (RDL) and the LP locker's
+// trading fees (RDL and WBNB), and splits them every 3 days.
+//
+// `distribute()` is permissionless and runs at most once per period. It first
+// collects the locker's fees (once the position exists), then splits what it
+// holds:
+// - RDL: 25% burned to 0x...dEaD, 25% to the LP locker, 50% to the dev.
+//   Once the mining pool has nothing left to pay, the dev's 50% goes to the
+//   mining contract instead, where it funds new rewards.
+// - WBNB: 50% to the LP locker, 50% to the dev.
+// Then it calls the locker's `increase()` so the LP share joins the position.
+//
+// The tax is collected in RDL, so the "buyback and burn" slice burns RDL
+// straight away instead of swapping for it. No swap means no slippage and
+// nothing for a sandwich bot to front-run.
+
+use ingot::Erc20
+use ingot::locker::LockerViews
+
+pub const BURN_BPS: u256 = 2_500
+pub const LP_BPS: u256 = 2_500
+pub const WBNB_LP_BPS: u256 = 5_000
+const BPS: u256 = 10_000
+const DEAD: u256 = 0xdead
+
+/// The one mining view the distributor needs.
+pub msg MiningPoolView {
+    #[selector = sol("available()")]
+    Available -> u256,
+}
+
+pub msg DistributorMsg {
+    #[selector = sol("bind(address,address)")]
+    Bind { token: Address, locker: Address } -> bool,
+    #[selector = sol("distribute()")]
+    Distribute -> (u256, u256),
+    #[selector = sol("nextDistribution()")]
+    NextDistribution -> u256,
+}
+
+#[event]
+struct Distributed {
+    rdl_burned: u256,
+    rdl_to_lp: u256,
+    rdl_to_dev: u256,
+    rdl_to_mining: u256,
+    wbnb_to_lp: u256,
+    wbnb_to_dev: u256,
+}
+
+struct Split {
+    deployer: Address,
+    token: Address,
+    locker: Address,
+    mining: Address,
+    dev: Address,
+    wbnb: Address,
+    period: Duration,
+    last: Timestamp,
+}
+
+pub contract Distributor uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    mut split: Split,
+
+    /// `period` is 3 days in production.
+    init(mining: Address, dev: Address, wbnb: Address, period: Duration)
+    uses (ctx, mut split)
+    {
+        assert!(
+            mining != Address::zero() && dev != Address::zero() && wbnb != Address::zero(),
+            "zero address",
+        )
+        split.deployer = ctx.caller()
+        split.mining = mining
+        split.dev = dev
+        split.wbnb = wbnb
+        split.period = period
+        split.last = ctx.timestamp()
+    }
+
+    recv DistributorMsg {
+        /// The token and locker both need this contract's address, so they
+        /// are deployed after it; the deployer binds them once.
+        Bind { token, locker } -> bool uses (ctx, mut split) {
+            assert!(ctx.caller() == split.deployer, "only deployer")
+            assert!(split.token == Address::zero(), "already bound")
+            assert!(
+                token != Address::zero() && locker != Address::zero(),
+                "zero address",
+            )
+            split.token = token
+            split.locker = locker
+            true
+        }
+
+        /// Split everything held. Returns (RDL split, WBNB split).
+        Distribute -> (u256, u256) uses (ctx, mut call, mut split, mut log) {
+            assert!(split.token != Address::zero(), "not bound")
+            let now = ctx.timestamp()
+            assert!(now >= split.last + split.period, "too early")
+            split.last = now
+
+            // Pull in the LP fees first, once the position exists.
+            let token_id: u256 = call
+                .call(
+                    addr: split.locker,
+                    gas: 100000,
+                    value: Wei::zero(),
+                    message: LockerViews::TokenId {},
+                )
+            if token_id != 0 {
+                let _: (u256, u256) = call
+                    .call(
+                        addr: split.locker,
+                        gas: 400000,
+                        value: Wei::zero(),
+                        message: LockerViews::CollectFees {},
+                    )
+            }
+
+            let rdl = balance_of(split.token, who: ctx.address())
+            let wbnb = balance_of(split.wbnb, who: ctx.address())
+            assert!(rdl > 0 || wbnb > 0, "nothing to distribute")
+
+            let burn = rdl * BURN_BPS / BPS
+            let rdl_lp = rdl * LP_BPS / BPS
+            let rdl_rest = rdl - burn - rdl_lp
+            let wbnb_lp = wbnb * WBNB_LP_BPS / BPS
+            let wbnb_dev = wbnb - wbnb_lp
+
+            let pool_left: u256 = call
+                .call(
+                    addr: split.mining,
+                    gas: 200000,
+                    value: Wei::zero(),
+                    message: MiningPoolView::Available {},
+                )
+            let (to_dev, to_mining) = if pool_left == 0 {
+                (0, rdl_rest)
+            } else {
+                (rdl_rest, 0)
+            }
+
+            send(
+                split.token,
+                to: Address::from_word_truncate(DEAD),
+                amount: burn,
+            )
+            send(split.token, to: split.locker, amount: rdl_lp)
+            send(split.token, to: split.dev, amount: to_dev)
+            send(split.token, to: split.mining, amount: to_mining)
+            send(split.wbnb, to: split.locker, amount: wbnb_lp)
+            send(split.wbnb, to: split.dev, amount: wbnb_dev)
+
+            if token_id != 0 && (rdl_lp > 0 || wbnb_lp > 0) {
+                let _: u256 = call
+                    .call(
+                        addr: split.locker,
+                        gas: 1500000,
+                        value: Wei::zero(),
+                        message: LockerViews::Increase {},
+                    )
+            }
+
+            log.emit(
+                Distributed {
+                    rdl_burned: burn,
+                    rdl_to_lp: rdl_lp,
+                    rdl_to_dev: to_dev,
+                    rdl_to_mining: to_mining,
+                    wbnb_to_lp: wbnb_lp,
+                    wbnb_to_dev: wbnb_dev,
+                },
+            )
+            (rdl, wbnb)
+        }
+
+        /// Unix time from which `distribute()` can run again.
+        NextDistribution -> u256 uses split {
+            (split.last + split.period).as_seconds()
+        }
+    }
+}
+
+fn balance_of(_ token: Address, who: Address) -> u256 uses (call: mut Call) {
+    call.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: who },
+    )
+}
+
+fn send(_ token: Address, to: Address, amount: u256) uses (call: mut Call) {
+    if amount == 0 { return }
+    let ok: bool = call
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to, amount },
+        )
+    assert!(ok, "token transfer failed")
+}

@@ -15,12 +15,14 @@ Work in progress, built in small PRs.
 
 | Module | File | State |
 | --- | --- | --- |
-| RDL token (fixed supply, no owner) | `src/lib.fe` | done |
+| RDL token (fixed supply, no owner), trade tax 5% falling to 1% over 30 days, no setter | `src/lib.fe` | done |
 | IEO: bid mode (sqrt-weighted, refunds) and slot mode, soft cap, batched refunds | `src/ieo.fe` | done |
 | Launch (LP seed, leftover burn/mining/bonus), dev pull, IEO stake unlock and early exit | `src/ieo.fe` | done |
 | LP locker: PancakeSwap v3 full-range position, no exit, fees only to `fee_to`, permissionless `increase()` | `src/locker.fe` | done |
 | Mining: subset-sum riddle per 60 s round, stake gate, IEO boost up to 2x, halving emission, 30-day vesting | `src/mining.fe`, `scripts/solve.py` | done |
-| Trade tax, `distribute()`, tweet voucher | | next |
+| Distributor: tax + LP fees split every 3 days (25% burn, 25% LP, 50% dev, dev share to miners once the pool is dry) | `src/distributor.fe` | done |
+| Tweet voucher boost (+10%) | | next |
+| BSC testnet deploy, demo | | planned |
 
 | Allocation | Share | Amount |
 | --- | --- | --- |
@@ -35,3 +37,13 @@ fe build
 ```
 
 License: Apache-2.0
+
+## Deploy order
+
+Every contract needs some of the others' addresses, so they are deployed in
+this order and bound once by the deployer:
+
+1. `Ieo`, `Mining`, `Distributor`
+2. `Riddle(ieo, mining, distributor, wbnb, npm)` (computes its own v3 pool address)
+3. `Locker(ieo, token, wbnb, npm, fee_to = distributor)`
+4. `ieo.bind(token, locker)`, `mining.bind(token)`, `distributor.bind(token, locker)`

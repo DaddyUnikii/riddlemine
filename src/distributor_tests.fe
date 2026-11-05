@@ -1,0 +1,217 @@
+// Distributor tests. A second Riddle deployment stands in for WBNB, and the
+// runner sends RDL and "WBNB" in as if they were tax and LP fees.
+
+use ingot::{Riddle, Erc20}
+use ingot::distributor::{Distributor, DistributorMsg, MiningPoolView}
+use ingot::locker::LockerViews
+use std::evm::SECOND
+
+const E18: u256 = 1_000_000_000_000_000_000
+const DEV: u256 = 0xde5
+const DEAD: u256 = 0xdead
+
+pub msg MockMsg {
+    #[selector = 0x70]
+    SetValue { value: u256 } -> bool,
+    #[selector = 0x71]
+    Calls -> u256,
+}
+
+/// Locker stand-in: a settable token id; counts collect and increase calls.
+pub contract MockDLocker {
+    mut token_id: u256,
+    mut calls: u256,
+
+    recv LockerViews {
+        CollectFees -> (u256, u256) uses (mut calls) {
+            calls += 1
+            (0, 0)
+        }
+        Increase -> u256 uses (mut calls) {
+            calls += 1
+            1
+        }
+        TokenId -> u256 uses token_id {
+            token_id
+        }
+        FeeTo -> Address {
+            Address::zero()
+        }
+    }
+
+    recv MockMsg {
+        SetValue { value } -> bool uses (mut token_id) {
+            token_id = value
+            true
+        }
+        Calls -> u256 uses calls {
+            calls
+        }
+    }
+}
+
+/// Mining stand-in: a settable `available()`.
+pub contract MockPool {
+    mut left: u256,
+
+    recv MiningPoolView {
+        Available -> u256 uses left {
+            left
+        }
+    }
+
+    recv MockMsg {
+        SetValue { value } -> bool uses (mut left) {
+            left = value
+            true
+        }
+        Calls -> u256 {
+            0
+        }
+    }
+}
+
+struct Setup { dist: Address, token: Address, wbnb: Address, locker: Address, mining: Address }
+
+fn set(_ addr: Address, _ value: u256) uses (evm: mut Evm) {
+    let _: bool = evm
+        .call(
+            addr,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MockMsg::SetValue { value },
+        )
+}
+
+fn setup(_ period: Duration, _ token_id: u256, _ pool_left: u256) -> Setup
+uses (evm: mut Evm)
+{
+    let me = evm.address()
+    let filler = Address::new(0x1)
+    let wbnb = evm
+        .create2<Riddle>(
+            value: Wei::zero(),
+            args: (me, filler, filler, filler, filler),
+            salt: 10,
+        )
+    let locker = evm.create2<MockDLocker>(value: Wei::zero(), args: (), salt: 11)
+    let mining = evm.create2<MockPool>(value: Wei::zero(), args: (), salt: 12)
+    let dist = evm
+        .create2<Distributor>(
+            value: Wei::zero(),
+            args: (mining, Address::new(DEV), wbnb, period),
+            salt: 13,
+        )
+    let token = evm
+        .create2<Riddle>(
+            value: Wei::zero(),
+            args: (me, filler, dist, wbnb, filler),
+            salt: 14,
+        )
+    let _: bool = evm
+        .call(
+            addr: dist,
+            gas: 100000,
+            value: Wei::zero(),
+            message: DistributorMsg::Bind { token, locker },
+        )
+    set(locker, token_id)
+    set(mining, pool_left)
+    Setup { dist, token, wbnb, locker, mining }
+}
+
+fn send(_ token: Address, _ to: Address, _ amount: u256) uses (evm: mut Evm) {
+    let _: bool = evm
+        .call(
+            addr: token,
+            gas: 200000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to, amount },
+        )
+}
+
+fn balance(_ token: Address, _ who: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: who },
+    )
+}
+
+fn distribute(_ dist: Address) -> (u256, u256) uses (evm: mut Evm) {
+    evm.call(
+        addr: dist,
+        gas: 3000000,
+        value: Wei::zero(),
+        message: DistributorMsg::Distribute {},
+    )
+}
+
+#[test]
+fn splits_rdl_and_wbnb() uses (evm: mut Evm) {
+    let s = setup(Duration::zero(), 1, 1)
+    send(s.token, s.dist, 1_000 * E18)
+    send(s.wbnb, s.dist, 100 * E18)
+    let (rdl, wbnb) = distribute(s.dist)
+    assert!(rdl == 1_000 * E18 && wbnb == 100 * E18)
+    assert!(balance(s.token, Address::new(DEAD)) == 250 * E18)
+    assert!(balance(s.token, s.locker) == 250 * E18)
+    assert!(balance(s.token, Address::new(DEV)) == 500 * E18)
+    assert!(balance(s.token, s.mining) == 0)
+    assert!(balance(s.wbnb, s.locker) == 50 * E18)
+    assert!(balance(s.wbnb, Address::new(DEV)) == 50 * E18)
+    // collect() then increase()
+    let calls: u256 = evm
+        .call(
+            addr: s.locker,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MockMsg::Calls {},
+        )
+    assert!(calls == 2)
+}
+
+#[test]
+fn dev_share_goes_to_miners_once_the_pool_is_dry() uses (evm: mut Evm) {
+    let s = setup(Duration::zero(), 1, 0)
+    send(s.token, s.dist, 1_000 * E18)
+    let _ = distribute(s.dist)
+    assert!(balance(s.token, s.mining) == 500 * E18)
+    assert!(balance(s.token, Address::new(DEV)) == 0)
+}
+
+#[test]
+fn before_launch_nothing_touches_the_locker_position() uses (evm: mut Evm) {
+    let s = setup(Duration::zero(), 0, 1)
+    send(s.token, s.dist, 1_000 * E18)
+    let _ = distribute(s.dist)
+    let calls: u256 = evm
+        .call(
+            addr: s.locker,
+            gas: 100000,
+            value: Wei::zero(),
+            message: MockMsg::Calls {},
+        )
+    assert!(calls == 0)
+    assert!(balance(s.token, s.locker) == 250 * E18)
+}
+
+#[test(should_revert)]
+fn runs_at_most_once_per_period() uses (evm: mut Evm) {
+    let s = setup(SECOND * 259_200, 1, 1)
+    send(s.token, s.dist, 1_000 * E18)
+    let _ = distribute(s.dist)
+}
+
+#[test(should_revert)]
+fn binds_only_once() uses (evm: mut Evm) {
+    let s = setup(Duration::zero(), 1, 1)
+    let _: bool = evm
+        .call(
+            addr: s.dist,
+            gas: 100000,
+            value: Wei::zero(),
+            message: DistributorMsg::Bind { token: s.token, locker: s.locker },
+        )
+}

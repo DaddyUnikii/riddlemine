@@ -225,9 +225,16 @@ uses (evm: mut Evm)
     }
     let _: u8 = finalize(ieo)
     settle_all(ieo)
-    let token = evm.create2<Riddle>(
+    let token = evm
+        .create2<Riddle>(
             value: Wei::zero(),
-            args: (ieo, Address::new(MINING)),
+            args: (
+                ieo,
+                Address::new(MINING),
+                Address::new(0xd15),
+                Address::new(0xb0b),
+                Address::new(0x9a1),
+            ),
             salt: 8,
         )
     (ieo, token, locker, d, first)
@@ -499,9 +506,16 @@ fn constants_line_up() {
 #[test(should_revert, balance = 1_000_000_000_000_000_000_000_000)]
 fn only_dev_binds_token() uses (evm: mut Evm) {
     let ieo = sale(MODE_BID)
-    let token = evm.create2<Riddle>(
+    let token = evm
+        .create2<Riddle>(
             value: Wei::zero(),
-            args: (ieo, Address::new(MINING)),
+            args: (
+                ieo,
+                Address::new(MINING),
+                Address::new(0xd15),
+                Address::new(0xb0b),
+                Address::new(0x9a1),
+            ),
             salt: 8,
         )
     let _: bool = evm

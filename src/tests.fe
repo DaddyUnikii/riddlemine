@@ -8,7 +8,13 @@ const MINING: u256 = 0x313
 fn deploy() -> Address uses (evm: mut Evm) {
     evm.create2<Riddle>(
         value: Wei::zero(),
-        args: (Address::new(IEO), Address::new(MINING)),
+        args: (
+            Address::new(IEO),
+            Address::new(MINING),
+            Address::new(0xd15),
+            Address::new(0xb0b),
+            Address::new(0x9a1),
+        ),
         salt: 0,
     )
 }
