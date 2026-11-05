@@ -1,0 +1,376 @@
+// Riddlemine IEO: one contract, two sale modes picked at deploy.
+//
+// Mode A (bid): anyone bids 0.01-2 BNB per wallet for 10 days. The target is
+// 400 BNB for 100M RDL (0.000004 BNB per RDL). If bids exceed the target,
+// allocations are weighted by sqrt(bid) so a whale putting in 200x the BNB
+// gets roughly 14x the tokens, and every unused wei is refunded.
+//
+// Mode B (slot): 50,000 slots of 2,000 RDL. Slot k costs 0.0055 BNB plus
+// 0.0000001 BNB per slot already sold, about 400 BNB for all of them.
+//
+// Both modes share the outcome rules:
+// - at least 50% sold: the sale succeeds and moves on to launch;
+// - under 50%: every buyer gets 90% back, 10% goes to the dev.
+// Refunds are pushed in permissionless batches (`settle`), and any push that
+// fails falls back to a pull (`claimRefund`), so one stubborn receiver can
+// never block the rest. Launch, the LP and the IEO stake live in the next PRs.
+
+use core::num::isqrt
+use std::evm::StorageMap
+
+pub const MODE_BID: u8 = 0
+pub const MODE_SLOT: u8 = 1
+
+pub const STATE_OPEN: u8 = 0
+pub const STATE_SETTLING: u8 = 1
+pub const STATE_SUCCESS: u8 = 2
+pub const STATE_FAILED: u8 = 3
+
+const E18: u256 = 1_000_000_000_000_000_000
+pub const IEO_TOKENS: u256 = 100_000_000 * E18
+
+// Mode A
+pub const TARGET: u256 = 400 * E18
+pub const MIN_BID: u256 = 10_000_000_000_000_000
+// 0.01 BNB
+pub const MAX_BID: u256 = 2 * E18
+// token-wei per wei of BNB: 1 BNB buys 250,000 RDL
+pub const RATE: u256 = 250_000
+
+// Mode B
+pub const SLOTS: u256 = 50_000
+pub const TOKENS_PER_SLOT: u256 = 2_000 * E18
+pub const SLOT_START: u256 = 5_500_000_000_000_000
+// 0.0055 BNB
+pub const SLOT_STEP: u256 = 100_000_000_000
+// 0.0000001 BNB
+
+// Refund share when the sale fails, in basis points.
+pub const FAIL_REFUND_BPS: u256 = 9_000
+
+pub msg IeoMsg {
+    #[selector = sol("bid()")]
+    Bid -> u256,
+    #[selector = sol("buySlots(uint256)")]
+    BuySlots { count: u256 } -> u256,
+    #[selector = sol("finalize()")]
+    Finalize -> u8,
+    #[selector = sol("settle(uint256)")]
+    Settle { max: u256 } -> u256,
+    #[selector = sol("claimRefund(address)")]
+    ClaimRefund { to: Address } -> Wei,
+    #[selector = sol("claimDevOnFailure()")]
+    ClaimDevOnFailure -> Wei,
+    #[selector = sol("slotCost(uint256)")]
+    SlotCost { count: u256 } -> u256,
+    #[selector = sol("mode()")]
+    Mode -> u8,
+    #[selector = sol("state()")]
+    State -> u8,
+    #[selector = sol("endTime()")]
+    EndTime -> Timestamp,
+    #[selector = sol("totalIn()")]
+    TotalIn -> u256,
+    #[selector = sol("slotsSold()")]
+    SlotsSold -> u256,
+    #[selector = sol("participants()")]
+    Participants -> u256,
+    #[selector = sol("settledCount()")]
+    SettledCount -> u256,
+    #[selector = sol("contributed(address)")]
+    Contributed { who: Address } -> u256,
+    #[selector = sol("allocation(address)")]
+    Allocation { who: Address } -> u256,
+    #[selector = sol("paid(address)")]
+    Paid { who: Address } -> u256,
+    #[selector = sol("pendingRefund(address)")]
+    PendingRefund { who: Address } -> u256,
+    #[selector = sol("raised()")]
+    Raised -> u256,
+    #[selector = sol("soldTokens()")]
+    SoldTokens -> u256,
+}
+
+#[event]
+struct BidPlaced {
+    #[indexed]
+    buyer: Address,
+    amount: u256,
+    total: u256,
+}
+
+#[event]
+struct SlotsBought {
+    #[indexed]
+    buyer: Address,
+    count: u256,
+    cost: u256,
+}
+
+#[event]
+struct Finalized { state: u8, total_in: u256 }
+
+#[event]
+struct Settled {
+    #[indexed]
+    buyer: Address,
+    tokens: u256,
+    paid: u256,
+    refund: u256,
+    pushed: bool,
+}
+
+/// Cost of `count` slots when `sold` are already gone:
+/// count * start + step * (count * sold + count * (count - 1) / 2).
+pub fn slot_cost(sold: u256, count: u256) -> u256 {
+    if count == 0 { return 0 }
+    count * SLOT_START + SLOT_STEP * (count * sold + count * (count - 1) / 2)
+}
+
+/// Tokens for a bid of `bid` wei in mode A. Under the target everyone is
+/// filled at RATE. Over it, the 100M are shared by sqrt(bid), capped at what
+/// the bid can pay for, so nobody pays more than RATE.
+pub fn bid_allocation(bid: u256, total_in: u256, sqrt_sum: u256) -> u256 {
+    let full = bid * RATE
+    if total_in <= TARGET || sqrt_sum == 0 {
+        return full
+    }
+    let weighted = IEO_TOKENS * isqrt(bid) / sqrt_sum
+    if weighted < full { weighted } else { full }
+}
+
+struct Book {
+    mode: u8,
+    state: u8,
+    end: Timestamp,
+    dev: Address,
+    total_in: u256,
+    sqrt_sum: u256,
+    slots_sold: u256,
+    count: u256,
+    cursor: u256,
+    raised: u256,
+    sold_tokens: u256,
+    dev_claimed: bool,
+    buyers: StorageMap<u256, Address>,
+    contributed: StorageMap<Address, u256>,
+    slots: StorageMap<Address, u256>,
+    allocation: StorageMap<Address, u256>,
+    paid: StorageMap<Address, u256>,
+    pending: StorageMap<Address, u256>,
+}
+
+fn add_buyer(who: Address) uses (book: mut Book) {
+    if book.contributed.get(key: who) == 0 {
+        book.buyers.set(key: book.count, value: who)
+        book.count += 1
+    }
+}
+
+pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    mut book: Book,
+
+    /// `duration` is the sale length (10 days in production).
+    init(mode: u8, duration: Duration, dev: Address)
+    uses (ctx, mut book)
+    {
+        assert!(mode == MODE_BID || mode == MODE_SLOT, "bad mode")
+        assert!(dev != Address::zero(), "zero dev")
+        book.mode = mode
+        book.dev = dev
+        book.end = ctx.timestamp() + duration
+    }
+
+    recv IeoMsg {
+        #[payable]
+        Bid -> u256 uses (ctx, mut book, mut log) {
+            assert!(book.mode == MODE_BID, "not a bid sale")
+            assert!(
+                book.state == STATE_OPEN && ctx.timestamp() <= book.end,
+                "sale closed",
+            )
+            let who = ctx.caller()
+            let amount = ctx.value().as_wei()
+            let before = book.contributed.get(key: who)
+            let after = before + amount
+            assert!(amount > 0 && after >= MIN_BID, "bid below 0.01 BNB")
+            assert!(after <= MAX_BID, "bid above 2 BNB per wallet")
+
+            add_buyer(who)
+            book.sqrt_sum = book.sqrt_sum - isqrt(before) + isqrt(after)
+            book.contributed.set(key: who, value: after)
+            book.total_in += amount
+            log.emit(BidPlaced { buyer: who, amount, total: after })
+            after
+        }
+
+        #[payable]
+        BuySlots { count } -> u256 uses (ctx, mut book, mut log) {
+            assert!(book.mode == MODE_SLOT, "not a slot sale")
+            assert!(
+                book.state == STATE_OPEN && ctx.timestamp() <= book.end,
+                "sale closed",
+            )
+            assert!(
+                count > 0 && book.slots_sold + count <= SLOTS,
+                "not enough slots",
+            )
+            let cost = slot_cost(sold: book.slots_sold, count)
+            assert!(ctx.value().as_wei() == cost, "send the exact slot cost")
+
+            let who = ctx.caller()
+            add_buyer(who)
+            book.contributed.set(key: who, value: book.contributed.get(key: who) + cost)
+            book.slots.set(key: who, value: book.slots.get(key: who) + count)
+            book.slots_sold += count
+            book.total_in += cost
+            log.emit(SlotsBought { buyer: who, count, cost })
+            book.slots_sold
+        }
+
+        /// Anyone can close the sale once it has ended, or as soon as every
+        /// slot is sold in mode B.
+        Finalize -> u8 uses (ctx, mut book, mut log) {
+            assert!(book.state == STATE_OPEN, "already finalized")
+            let sold_out = book.mode == MODE_SLOT && book.slots_sold == SLOTS
+            assert!(sold_out || ctx.timestamp() >= book.end, "sale still open")
+
+            let ok = if book.mode == MODE_BID {
+                book.total_in * 2 >= TARGET
+            } else {
+                book.slots_sold * 2 >= SLOTS
+            }
+            book.state = if ok { STATE_SETTLING } else { STATE_FAILED }
+            log.emit(Finalized { state: book.state, total_in: book.total_in })
+            book.state
+        }
+
+        /// Process up to `max` buyers: fix their allocation and push any
+        /// refund. Permissionless; call it until settledCount == participants.
+        Settle { max } -> u256 uses (mut call, mut book, mut log) {
+            assert!(
+                book.state == STATE_SETTLING || book.state == STATE_FAILED,
+                "not finalized",
+            )
+            var done: u256 = 0
+            while done < max && book.cursor < book.count {
+                let who = book.buyers.get(key: book.cursor)
+                // Advance first, so a reentrant call can never settle the same buyer twice.
+                book.cursor += 1
+                let put = book.contributed.get(key: who)
+                var tokens: u256 = 0
+                var paid: u256 = 0
+                var refund: u256 = 0
+
+                if book.state == STATE_FAILED {
+                    refund = put * FAIL_REFUND_BPS / 10_000
+                } else if book.mode == MODE_BID {
+                    tokens = bid_allocation(
+                        bid: put,
+                        total_in: book.total_in,
+                        sqrt_sum: book.sqrt_sum,
+                    )
+                    // Round the price up so the contract never undercharges.
+                    paid = (tokens + RATE - 1) / RATE
+                    if paid > put { paid = put }
+                    refund = put - paid
+                } else {
+                    tokens = book.slots.get(key: who) * TOKENS_PER_SLOT
+                    paid = put
+                }
+
+                book.allocation.set(key: who, value: tokens)
+                book.paid.set(key: who, value: paid)
+                book.raised += paid
+                book.sold_tokens += tokens
+
+                var pushed = true
+                if refund > 0 {
+                    pushed = call.send_value(addr: who, gas: 0, value: wei_of(refund)).success()
+                    if !pushed {
+                        book.pending.set(key: who, value: book.pending.get(key: who) + refund)
+                    }
+                }
+                log.emit(Settled { buyer: who, tokens, paid, refund, pushed })
+                done += 1
+            }
+            if book.state == STATE_SETTLING && book.cursor == book.count {
+                book.state = STATE_SUCCESS
+            }
+            done
+        }
+
+        /// Pull a refund whose push failed, to any address.
+        ClaimRefund { to } -> Wei uses (ctx, mut call, mut book) {
+            let who = ctx.caller()
+            let amount = book.pending.get(key: who)
+            assert!(amount > 0, "nothing to claim")
+            book.pending.set(key: who, value: 0)
+            assert!(
+                call.send_value(addr: to, gas: 0, value: wei_of(amount)).success(),
+                "transfer failed",
+            )
+            wei_of(amount)
+        }
+
+        /// On a failed sale the dev keeps 10% of what came in.
+        ClaimDevOnFailure -> Wei uses (mut call, mut book) {
+            assert!(book.state == STATE_FAILED, "sale did not fail")
+            assert!(!book.dev_claimed, "already claimed")
+            book.dev_claimed = true
+            let amount = book.total_in - book.total_in * FAIL_REFUND_BPS / 10_000
+            assert!(
+                call.send_value(addr: book.dev, gas: 0, value: wei_of(amount)).success(),
+                "transfer failed",
+            )
+            wei_of(amount)
+        }
+
+        SlotCost { count } -> u256 uses book {
+            slot_cost(sold: book.slots_sold, count)
+        }
+        Mode -> u8 uses book {
+            book.mode
+        }
+        State -> u8 uses book {
+            book.state
+        }
+        EndTime -> Timestamp uses book {
+            book.end
+        }
+        TotalIn -> u256 uses book {
+            book.total_in
+        }
+        SlotsSold -> u256 uses book {
+            book.slots_sold
+        }
+        Participants -> u256 uses book {
+            book.count
+        }
+        SettledCount -> u256 uses book {
+            book.cursor
+        }
+        Contributed { who } -> u256 uses book {
+            book.contributed.get(key: who)
+        }
+        Allocation { who } -> u256 uses book {
+            book.allocation.get(key: who)
+        }
+        Paid { who } -> u256 uses book {
+            book.paid.get(key: who)
+        }
+        PendingRefund { who } -> u256 uses book {
+            book.pending.get(key: who)
+        }
+        Raised -> u256 uses book {
+            book.raised
+        }
+        SoldTokens -> u256 uses book {
+            book.sold_tokens
+        }
+    }
+}
+
+fn wei_of(_ n: u256) -> Wei {
+    std::evm::wei(n)
+}
