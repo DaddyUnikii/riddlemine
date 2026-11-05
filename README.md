@@ -43,7 +43,9 @@ License: Apache-2.0
 Every contract needs some of the others' addresses, so they are deployed in
 this order and bound once by the deployer:
 
-1. `Ieo`, `Mining(ieo, 60, 7 days, 30 days, bot)`, `Distributor`
+1. `Ieo(mode, 10 days, dev, mining, 10 days, scale)`, `Mining(ieo, 60, 7 days, 30 days, bot)`, `Distributor`
+   (`scale` is 1 on mainnet; on testnet it divides every BNB amount of the sale,
+   caps included, so the demo runs on faucet BNB)
 2. `Riddle(ieo, mining, distributor, wbnb, npm)` (computes its own v3 pool address)
 3. `Locker(ieo, token, wbnb, npm, fee_to = distributor)`
 4. `ieo.bind(token, locker)`, `mining.bind(token)`, `distributor.bind(token, locker)`

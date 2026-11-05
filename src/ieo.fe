@@ -130,6 +130,8 @@ pub msg IeoMsg {
     Launched -> bool,
     #[selector = sol("soldTokens()")]
     SoldTokens -> u256,
+    #[selector = sol("scale()")]
+    Scale -> u256,
 }
 
 #[event]
@@ -180,18 +182,19 @@ struct Settled {
 }
 
 /// Cost of `count` slots when `sold` are already gone:
-/// count * start + step * (count * sold + count * (count - 1) / 2).
-pub fn slot_cost(sold: u256, count: u256) -> u256 {
+/// (count * start + step * (count * sold + count * (count - 1) / 2)) / scale.
+pub fn slot_cost(sold: u256, count: u256, scale: u256) -> u256 {
     if count == 0 { return 0 }
-    count * SLOT_START + SLOT_STEP * (count * sold + count * (count - 1) / 2)
+    (count * SLOT_START + SLOT_STEP * (count * sold + count * (count - 1) / 2)) / scale
 }
 
 /// Tokens for a bid of `bid` wei in mode A. Under the target everyone is
 /// filled at RATE. Over it, the 100M are shared by sqrt(bid), capped at what
-/// the bid can pay for, so nobody pays more than RATE.
-pub fn bid_allocation(bid: u256, total_in: u256, sqrt_sum: u256) -> u256 {
-    let full = bid * RATE
-    if total_in <= TARGET || sqrt_sum == 0 {
+/// the bid can pay for, so nobody pays more than RATE. `scale` divides every
+/// BNB amount (1 on mainnet), so a testnet demo can run on faucet BNB.
+pub fn bid_allocation(bid: u256, total_in: u256, sqrt_sum: u256, scale: u256) -> u256 {
+    let full = bid * RATE * scale
+    if total_in * scale <= TARGET || sqrt_sum == 0 {
         return full
     }
     let weighted = IEO_TOKENS * isqrt(bid) / sqrt_sum
@@ -200,6 +203,7 @@ pub fn bid_allocation(bid: u256, total_in: u256, sqrt_sum: u256) -> u256 {
 
 struct Book {
     mode: u8,
+    scale: u256,
     state: u8,
     end: Timestamp,
     dev: Address,
@@ -238,16 +242,26 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
     mut book: Book,
 
     /// `duration` is the sale length and `unlock_step` the stake unlock step
-    /// (both 10 days in production).
-    init(mode: u8, duration: Duration, dev: Address, mining: Address, unlock_step: Duration)
+    /// (both 10 days in production). `scale` divides every BNB amount of the
+    /// sale: 1 on mainnet, larger on testnet so a demo fits faucet BNB.
+    init(
+        mode: u8,
+        duration: Duration,
+        dev: Address,
+        mining: Address,
+        unlock_step: Duration,
+        scale: u256,
+    )
     uses (ctx, mut book)
     {
         assert!(mode == MODE_BID || mode == MODE_SLOT, "bad mode")
+        assert!(scale > 0, "zero scale")
         assert!(
             dev != Address::zero() && mining != Address::zero(),
             "zero address",
         )
         book.mode = mode
+        book.scale = scale
         book.dev = dev
         book.mining = mining
         book.unlock_step = unlock_step
@@ -266,8 +280,11 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
             let amount = ctx.value().as_wei()
             let before = book.contributed.get(key: who)
             let after = before + amount
-            assert!(amount > 0 && after >= MIN_BID, "bid below 0.01 BNB")
-            assert!(after <= MAX_BID, "bid above 2 BNB per wallet")
+            assert!(
+                amount > 0 && after >= MIN_BID / book.scale,
+                "bid below minimum",
+            )
+            assert!(after <= MAX_BID / book.scale, "bid above wallet cap")
 
             add_buyer(who)
             book.sqrt_sum = book.sqrt_sum - isqrt(before) + isqrt(after)
@@ -288,7 +305,7 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
                 count > 0 && book.slots_sold + count <= SLOTS,
                 "not enough slots",
             )
-            let cost = slot_cost(sold: book.slots_sold, count)
+            let cost = slot_cost(sold: book.slots_sold, count, scale: book.scale)
             assert!(ctx.value().as_wei() == cost, "send the exact slot cost")
 
             let who = ctx.caller()
@@ -309,7 +326,7 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
             assert!(sold_out || ctx.timestamp() >= book.end, "sale still open")
 
             let ok = if book.mode == MODE_BID {
-                book.total_in * 2 >= TARGET
+                book.total_in * 2 * book.scale >= TARGET
             } else {
                 book.slots_sold * 2 >= SLOTS
             }
@@ -345,9 +362,11 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
                         bid: put,
                         total_in: book.total_in,
                         sqrt_sum: book.sqrt_sum,
+                        scale: book.scale,
                     )
                     // Round the price up so the contract never undercharges.
-                    paid = (tokens + RATE - 1) / RATE
+                    let rate = RATE * book.scale
+                    paid = (tokens + rate - 1) / rate
                     if paid > put { paid = put }
                     refund = put - paid
                 } else {
@@ -509,7 +528,10 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
             book.launched
         }
         SlotCost { count } -> u256 uses book {
-            slot_cost(sold: book.slots_sold, count)
+            slot_cost(sold: book.slots_sold, count, scale: book.scale)
+        }
+        Scale -> u256 uses book {
+            book.scale
         }
         Mode -> u8 uses book {
             book.mode
