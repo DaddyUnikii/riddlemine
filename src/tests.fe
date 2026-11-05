@@ -1,0 +1,94 @@
+// Run with `fe test`.
+
+use ingot::{Riddle, Erc20, TOTAL_SUPPLY, IEO_SHARE, LP_SHARE, MINING_SHARE}
+
+const IEO: u256 = 0x1e0
+const MINING: u256 = 0x313
+
+fn deploy() -> Address uses (evm: mut Evm) {
+    evm.create2<Riddle>(
+        value: Wei::zero(),
+        args: (Address::new(IEO), Address::new(MINING)),
+        salt: 0,
+    )
+}
+
+fn balance(_ token: Address, _ who: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: who },
+    )
+}
+
+#[test]
+fn supply_is_split_at_deploy() uses (evm: mut Evm) {
+    let token = deploy()
+    let total: u256 = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::TotalSupply {},
+        )
+    assert!(total == TOTAL_SUPPLY)
+    assert!(IEO_SHARE + LP_SHARE + MINING_SHARE == TOTAL_SUPPLY)
+    assert!(balance(token, Address::new(IEO)) == IEO_SHARE + LP_SHARE)
+    assert!(balance(token, Address::new(MINING)) == MINING_SHARE)
+    // The deployer (dev) holds nothing.
+    assert!(balance(token, evm.address()) == 0)
+    let dec: u8 = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Decimals {},
+        )
+    assert!(dec == 18)
+}
+
+#[test(should_revert)]
+fn transfer_without_balance_reverts() uses (evm: mut Evm) {
+    let token = deploy()
+    let _: bool = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to: Address::new(7), amount: 1 },
+        )
+}
+
+#[test(should_revert)]
+fn transfer_from_without_allowance_reverts() uses (evm: mut Evm) {
+    let token = deploy()
+    let _: bool = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::TransferFrom { from: Address::new(IEO), to: evm.address(), amount: 1 },
+        )
+}
+
+#[test]
+fn approve_sets_allowance() uses (evm: mut Evm) {
+    let token = deploy()
+    let ok: bool = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Approve { spender: Address::new(9), amount: 42 },
+        )
+    assert!(ok)
+    let a: u256 = evm
+        .call(
+            addr: token,
+            gas: 100000,
+            value: Wei::zero(),
+            message: Erc20::Allowance { owner: evm.address(), spender: Address::new(9) },
+        )
+    assert!(a == 42)
+}

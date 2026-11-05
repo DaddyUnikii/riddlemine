@@ -1,0 +1,145 @@
+// Riddlemine: a fair-launch token mined by AI agents.
+// This ingot holds the RDL token. The IEO, mining and LP modules land in later PRs.
+
+use std::evm::StorageMap
+
+pub const TOTAL_SUPPLY: u256 = 1_000_000_000_000_000_000_000_000_000
+// 1B * 1e18
+pub const IEO_SHARE: u256 = 100_000_000_000_000_000_000_000_000
+// 10%
+pub const LP_SHARE: u256 = 80_000_000_000_000_000_000_000_000
+// 8%
+pub const MINING_SHARE: u256 = 820_000_000_000_000_000_000_000_000
+// 82%
+const MAX_U256: u256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+
+msg Erc20 {
+    #[selector = sol("name()")]
+    Name -> String<10>,
+    #[selector = sol("symbol()")]
+    Symbol -> String<3>,
+    #[selector = sol("decimals()")]
+    Decimals -> u8,
+    #[selector = sol("totalSupply()")]
+    TotalSupply -> u256,
+    #[selector = sol("balanceOf(address)")]
+    BalanceOf { account: Address } -> u256,
+    #[selector = sol("allowance(address,address)")]
+    Allowance { owner: Address, spender: Address } -> u256,
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { to: Address, amount: u256 } -> bool,
+    #[selector = sol("approve(address,uint256)")]
+    Approve { spender: Address, amount: u256 } -> bool,
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
+}
+
+#[event]
+struct Transfer {
+    #[indexed]
+    from: Address,
+    #[indexed]
+    to: Address,
+    value: u256,
+}
+
+#[event]
+struct Approval {
+    #[indexed]
+    owner: Address,
+    #[indexed]
+    spender: Address,
+    value: u256,
+}
+
+struct Ledger {
+    total_supply: u256,
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
+}
+
+fn move_tokens(from: Address, to: Address, amount: u256)
+uses (ledger: mut Ledger, log: mut Log)
+{
+    assert!(to != Address::zero(), "transfer to zero address")
+    let bal = ledger.balances.get(key: from)
+    assert!(bal >= amount, "insufficient balance")
+    ledger.balances.set(key: from, value: bal - amount)
+    ledger.balances.set(key: to, value: ledger.balances.get(key: to) + amount)
+    log.emit(Transfer { from, to, value: amount })
+}
+
+/// Fixed-supply RDL. The whole supply is minted once at deploy, split between
+/// the IEO contract (IEO + LP share) and the mining pool. No owner, no mint,
+/// no pause, no blacklist: there is nothing to administer after deploy.
+pub contract Riddle uses (ctx: Ctx, log: mut Log) {
+    mut ledger: Ledger,
+
+    init(ieo: Address, mining: Address)
+    uses (mut ledger, mut log)
+    {
+        assert!(
+            ieo != Address::zero() && mining != Address::zero(),
+            "zero address",
+        )
+        ledger.total_supply = TOTAL_SUPPLY
+        ledger.balances.set(key: ieo, value: IEO_SHARE + LP_SHARE)
+        ledger.balances.set(
+                key: mining,
+                value: ledger.balances.get(key: mining) + MINING_SHARE,
+            )
+        log.emit(
+            Transfer { from: Address::zero(), to: ieo, value: IEO_SHARE + LP_SHARE },
+        )
+        log.emit(
+            Transfer { from: Address::zero(), to: mining, value: MINING_SHARE },
+        )
+    }
+
+    recv Erc20 {
+        Name -> String<10> {
+            "Riddlemine"
+        }
+        Symbol -> String<3> {
+            "RDL"
+        }
+        Decimals -> u8 {
+            18
+        }
+        TotalSupply -> u256 uses ledger {
+            ledger.total_supply
+        }
+        BalanceOf { account } -> u256 uses ledger {
+            ledger.balances.get(key: account)
+        }
+        Allowance { owner, spender } -> u256 uses ledger {
+            ledger.allowances.get(key: (owner, spender))
+        }
+
+        Transfer { to, amount } -> bool uses (ctx, mut ledger, mut log) {
+            move_tokens(from: ctx.caller(), to, amount)
+            true
+        }
+
+        Approve { spender, amount } -> bool uses (ctx, mut ledger, mut log) {
+            let owner = ctx.caller()
+            ledger.allowances.set(key: (owner, spender), value: amount)
+            log.emit(Approval { owner, spender, value: amount })
+            true
+        }
+
+        TransferFrom { from, to, amount } -> bool
+        uses (ctx, mut ledger, mut log)
+        {
+            let spender = ctx.caller()
+            let allowed = ledger.allowances.get(key: (from, spender))
+            assert!(allowed >= amount, "insufficient allowance")
+            // An unlimited allowance is never decreased (same as OpenZeppelin).
+            if allowed != MAX_U256 {
+                ledger.allowances.set(key: (from, spender), value: allowed - amount)
+            }
+            move_tokens(from, to, amount)
+            true
+        }
+    }
+}
