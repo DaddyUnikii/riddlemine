@@ -1,0 +1,41 @@
+// Exact integer gross-up, including the floor-tax rounding boundary.
+use ingot::swap_adapter::{gross_for_net, net_from_gross}
+
+#[test]
+fn gross_quote_pays_the_minimum_that_covers_pool_debt() {
+    assert!(gross_for_net(net: 1000, bps: 500) == 1052)
+    assert!(net_from_gross(gross: 1052, bps: 500) == 1000)
+    assert!(net_from_gross(gross: 1051, bps: 500) == 999)
+}
+
+#[test]
+fn gross_quote_inverse_is_minimal_at_every_supported_tax_rate() {
+    var bps: u256 = 100
+    while bps <= 500 {
+        var net: u256 = 0
+        while net <= 200 {
+            let gross = gross_for_net(net, bps)
+            assert!(net_from_gross(gross, bps) == net)
+            if gross > 0 {
+                assert!(net_from_gross(gross: gross - 1, bps) < net)
+            }
+            net += 1
+        }
+        bps += 1
+    }
+}
+
+#[test]
+fn gross_quote_preserves_large_balances_and_floor_dust() {
+    let balance: u256 = 1_000_000_000_000_000_000_000_000_000
+    let net = net_from_gross(gross: balance, bps: 500)
+    let required = gross_for_net(net, bps: 500)
+    assert!(required <= balance)
+    assert!(net_from_gross(gross: required, bps: 500) == net)
+    assert!(net_from_gross(gross: required - 1, bps: 500) < net)
+    assert!(gross_for_net(net: 19, bps: 500) == 19)
+    assert!(gross_for_net(net: 20, bps: 500) == 21)
+    assert!(gross_for_net(net: 0, bps: 500) == 0)
+    assert!(gross_for_net(net: 1000, bps: 100) == 1010)
+    assert!(gross_for_net(net: 1000, bps: 300) == 1030)
+}

@@ -44,6 +44,18 @@ pub msg Erc20 {
     TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
 }
 
+/// Read-only trading metadata. A quote never starts or advances the clock.
+pub msg TaxViews {
+    #[selector = sol("currentTaxBps()")]
+    CurrentTaxBps -> u256,
+    #[selector = sol("pool()")]
+    Pool -> Address,
+    #[selector = sol("positionManager()")]
+    PositionManager -> Address,
+    #[selector = sol("distributor()")]
+    Distributor -> Address,
+}
+
 #[event]
 struct Transfer {
     #[indexed]
@@ -165,6 +177,27 @@ pub contract Riddle uses (ctx: Ctx, log: mut Log) {
         log.emit(
             Transfer { from: Address::zero(), to: mining, value: MINING_SHARE },
         )
+    }
+
+    recv TaxViews {
+        /// Before any qualifying transfer, the first trade rate applies.
+        /// This view does not mutate started/start or grant a tax exemption.
+        CurrentTaxBps -> u256 uses (ctx, tax) {
+            if !tax.started {
+                TAX_START_BPS
+            } else {
+                tax_bps(elapsed: (ctx.timestamp() - tax.start).as_seconds())
+            }
+        }
+        Pool -> Address uses tax {
+            tax.pool
+        }
+        PositionManager -> Address uses tax {
+            tax.npm
+        }
+        Distributor -> Address uses tax {
+            tax.distributor
+        }
     }
 
     recv Erc20 {
