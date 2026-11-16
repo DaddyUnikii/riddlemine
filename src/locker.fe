@@ -178,6 +178,10 @@ pub contract Locker uses (ctx: Ctx, call: mut Call, log: mut Log) {
                         deadline: ctx.timestamp().as_seconds(),
                     },
                 )
+            // A mint may consume less than desired. Leave no residual spending
+            // authority after this operation; approvals are finite, not unlimited.
+            approve(lock.token, spender: lock.npm, amount: 0)
+            approve(lock.wbnb, spender: lock.npm, amount: 0)
             lock.token_id = token_id
             log.emit(Seeded { token_id, liquidity, rdl: tokens, wbnb: bnb })
             true
@@ -225,6 +229,8 @@ pub contract Locker uses (ctx: Ctx, call: mut Call, log: mut Log) {
                         deadline: ctx.timestamp().as_seconds(),
                     },
                 )
+            approve(lock.token, spender: lock.npm, amount: 0)
+            approve(lock.wbnb, spender: lock.npm, amount: 0)
             liquidity
         }
 

@@ -19,9 +19,10 @@ const MINING: u256 = 0x313
 const FEE_TO: u256 = 0xfee
 const Q96: u256 = 0x1000000000000000000000000
 
-/// WBNB stand-in: deposit credits the sender, approvals are accepted.
+/// WBNB stand-in: deposit credits the sender; finite approvals are recorded.
 pub contract MockWbnb uses (ctx: Ctx) {
     mut bal: StorageMap<Address, u256>,
+    mut allowed: StorageMap<(Address, Address), u256>,
 
     recv WbnbMsg {
         #[payable]
@@ -49,13 +50,14 @@ pub contract MockWbnb uses (ctx: Ctx) {
         BalanceOf { account } -> u256 uses bal {
             bal.get(key: account)
         }
-        Allowance { owner: _, spender: _ } -> u256 {
-            0
+        Allowance { owner, spender } -> u256 uses allowed {
+            allowed.get(key: (owner, spender))
         }
         Transfer { to: _, amount: _ } -> bool {
             true
         }
-        Approve { spender: _, amount: _ } -> bool {
+        Approve { spender, amount } -> bool uses (ctx, mut allowed) {
+            allowed.set(key: (ctx.caller(), spender), value: amount)
             true
         }
         TransferFrom { from: _, to: _, amount: _ } -> bool {
@@ -385,4 +387,71 @@ fn increase_adds_what_the_locker_holds() uses (evm: mut Evm) {
     } else {
         assert!(a1 == 1_500 && a0 == ether(1).as_wei())
     }
+}
+
+fn allowance(_ token: Address, _ owner: Address, _ spender: Address) -> u256
+uses (evm: mut Evm)
+{
+    evm.call(
+        addr: token,
+        gas: 100000,
+        value: Wei::zero(),
+        message: Erc20::Allowance { owner, spender },
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn seed_clears_unused_rdl_allowance() uses (evm: mut Evm) {
+    let (locker, token, _wbnb, npm) = setup()
+    seed(locker, token, 1_000, ether(1))
+    // This position-manager stand-in consumes none of the approved RDL.
+    // The allowance therefore needs an explicit reset even after a successful mint.
+    assert!(
+        allowance(token, locker, npm) == 0,
+        "seed left a live allowance",
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn increase_clears_unused_rdl_allowance() uses (evm: mut Evm) {
+    let (locker, token, _wbnb, npm) = setup()
+    seed(locker, token, 1_000, ether(1))
+    let _: u256 = evm
+        .call(
+            addr: locker,
+            gas: 2000000,
+            value: Wei::zero(),
+            message: LockerViews::Increase {},
+        )
+    assert!(
+        allowance(token, locker, npm) == 0,
+        "increase left a live allowance",
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn seed_clears_unused_wbnb_allowance() uses (evm: mut Evm) {
+    let (locker, token, wbnb, npm) = setup()
+    seed(locker, token, 1_000, ether(1))
+    assert!(
+        allowance(wbnb, locker, npm) == 0,
+        "seed left a WBNB allowance",
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn increase_clears_unused_wbnb_allowance() uses (evm: mut Evm) {
+    let (locker, token, wbnb, npm) = setup()
+    seed(locker, token, 1_000, ether(1))
+    let _: u256 = evm
+        .call(
+            addr: locker,
+            gas: 2_000_000,
+            value: Wei::zero(),
+            message: LockerViews::Increase {},
+        )
+    assert!(
+        allowance(wbnb, locker, npm) == 0,
+        "increase left a WBNB allowance",
+    )
 }

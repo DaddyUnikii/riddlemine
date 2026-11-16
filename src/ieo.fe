@@ -499,6 +499,7 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
         /// Leave now: the unlocked part in full, half of the locked part, and
         /// the other half to the mining pool.
         ExitEarly -> u256 uses (ctx, mut call, mut book, mut log) {
+            assert!(book.launched, "not launched")
             let who = ctx.caller()
             let free = withdrawable(who)
             let locked = locked_stake(who)

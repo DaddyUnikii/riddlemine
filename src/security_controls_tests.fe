@@ -1,0 +1,62 @@
+// Disprove controls: use a realizable order book, not an arbitrary denominator.
+// The original audit's 35,000x scale-cliff claim used an impossible sqrt_sum.
+
+use core::num::isqrt
+use ingot::{pool_address, IEO_SHARE, LP_SHARE, MINING_SHARE, TOTAL_SUPPLY}
+use ingot::ieo::{bid_allocation, IEO_TOKENS, MAX_BID, TARGET}
+
+#[test]
+fn equal_bids_keep_the_same_allocation_across_scales() {
+    let bidders: u256 = 201
+    let scaled_bid = MAX_BID / 10_000
+    let main = bid_allocation(
+        bid: MAX_BID,
+        total_in: bidders * MAX_BID,
+        sqrt_sum: bidders * isqrt(MAX_BID),
+        scale: 1,
+    )
+    let demo = bid_allocation(
+        bid: scaled_bid,
+        total_in: bidders * scaled_bid,
+        sqrt_sum: bidders * isqrt(scaled_bid),
+        scale: 10_000,
+    )
+    assert!(main == IEO_TOKENS / bidders)
+    assert!(demo == main)
+}
+
+#[test]
+fn homogeneous_book_has_no_thirty_thousand_fold_target_cliff() {
+    let bid = MAX_BID / 10_000
+    let under = bid_allocation(
+        bid,
+        total_in: TARGET / 10_000,
+        sqrt_sum: 200 * isqrt(bid),
+        scale: 10_000,
+    )
+    let over = bid_allocation(
+        bid,
+        total_in: 201 * bid,
+        sqrt_sum: 201 * isqrt(bid),
+        scale: 10_000,
+    )
+    assert!(under == IEO_TOKENS / 200)
+    assert!(over == IEO_TOKENS / 201)
+    assert!(under / over == 1)
+}
+
+#[test]
+fn configured_pool_matches_the_recorded_testnet_pool() {
+    let actual = pool_address(
+        token: Address::new(0xf65E38d64b5854298EaE18CbCd232b0421109092),
+        wbnb: Address::new(0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd),
+    )
+    assert!(
+        actual == Address::new(0xec678a5a49861e057c601d2251e6025e9c7bef1c),
+    )
+}
+
+#[test]
+fn allocations_still_sum_to_the_fixed_supply() {
+    assert!(IEO_SHARE + LP_SHARE + MINING_SHARE == TOTAL_SUPPLY)
+}

@@ -104,7 +104,10 @@ uses (ctx: Ctx, ledger: mut Ledger, tax: mut Tax, log: mut Log)
     // moved by the position manager and fees collected to the distributor
     // do not.
     var fee: u256 = 0
-    if (from == tax.pool || to == tax.pool) && ctx.caller() != tax.npm && to != tax.distributor {
+    if amount > 0
+        && (from == tax.pool || to == tax.pool)
+        && ctx.caller() != tax.npm
+        && to != tax.distributor {
         if !tax.started {
             tax.started = true
             tax.start = ctx.timestamp()
