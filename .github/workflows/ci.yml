@@ -39,6 +39,7 @@ jobs:
       - name: Python and local EVM regressions
         env:
           LOCAL_EVM_RPC: http://127.0.0.1:18556
+          RUN_LOCAL_V3: '1'
         run: |
           anvil --host 127.0.0.1 --port 18556 --chain-id 97 --silent > "$RUNNER_TEMP/riddlemine-anvil.log" 2>&1 &
           anvil_pid=$!

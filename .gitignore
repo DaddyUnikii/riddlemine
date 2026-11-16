@@ -7,3 +7,6 @@ __pycache__/
 secrets/
 *.key
 bidders*.json
+node_modules/
+.local-evidence/
+tests/fixtures/pancake_v3/evidence/

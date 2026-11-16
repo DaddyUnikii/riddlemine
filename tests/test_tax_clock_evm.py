@@ -152,6 +152,29 @@ class TaxClockEvmTests(unittest.TestCase):
         self.advance_15_days()
         self.assertEqual(self.first_buy(), 50)
 
+    def test_tax_quote_is_inert_until_first_positive_trade(self):
+        self.assertEqual(self.view("currentTaxBps()"), 500)
+        self.assertEqual(self.view("currentTaxBps()"), 500)
+        self.advance_15_days()
+        self.assertEqual(self.view("currentTaxBps()"), 500)
+        self.liquidity_fixture()
+        self.assertEqual(self.first_buy(), 50)
+
+    def test_tax_quote_matches_decay_and_floor(self):
+        self.liquidity_fixture()
+        self.assertEqual(self.first_buy(), 50)
+        self.advance_15_days()
+        self.assertEqual(self.view("currentTaxBps()"), 300)
+        self.assertEqual(self.first_buy(), 30)
+        self.advance_15_days()
+        self.assertEqual(self.view("currentTaxBps()"), 100)
+        self.assertEqual(self.first_buy(), 10)
+
+    def test_tax_metadata_matches_constructor_bindings(self):
+        self.assertEqual(self.view("pool()"), int(self.pool, 16))
+        self.assertEqual(self.view("positionManager()"), int(NPM, 16))
+        self.assertEqual(self.view("distributor()"), int(DIST, 16))
+
     def test_real_positive_transfer_still_starts_tax_decay(self):
         self.liquidity_fixture()
         self.impersonate(IEO)
