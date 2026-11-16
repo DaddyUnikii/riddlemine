@@ -98,18 +98,18 @@ struct Seen {
     inc1: u256,
 }
 
-pub contract MockNpm {
+pub contract MockNpm uses (ctx: Ctx) {
     mut seen: Seen,
 
     recv PositionManagerMsg {
         CreatePool { token0, token1, fee, sqrt_price_x96 } -> Address
-        uses (mut seen)
+        uses (ctx, mut seen)
         {
             seen.t0 = token0
             seen.t1 = token1
             seen.fee = fee
             seen.sqrt_price = sqrt_price_x96
-            Address::new(0x9001)
+            ctx.address()
         }
         Mint {
             token0: _,
@@ -155,6 +155,14 @@ pub contract MockNpm {
             seen.collect_to = recipient
             seen.collect_max = amount0_max
             (0, 0)
+        }
+    }
+
+    recv ingot::locker::PoolStateMsg {
+        Slot0 -> (u256, i32, u16, u16, u16, u32, bool)
+        uses seen
+        {
+            (seen.sqrt_price, 0, 0, 1, 1, 0, true)
         }
     }
 

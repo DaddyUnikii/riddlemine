@@ -257,6 +257,14 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
         assert!(mode == MODE_BID || mode == MODE_SLOT, "bad mode")
         assert!(scale > 0, "zero scale")
         assert!(
+            mode != MODE_SLOT || scale <= SLOT_START,
+            "slot scale too large",
+        )
+        assert!(
+            mode != MODE_BID || scale <= MIN_BID,
+            "bid scale too large",
+        )
+        assert!(
             dev != Address::zero() && mining != Address::zero(),
             "zero address",
         )

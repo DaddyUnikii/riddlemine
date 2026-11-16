@@ -1,0 +1,580 @@
+// Real Locker/Distributor integration at the dependency seam.
+// This is NOT an official V3 manager: it implements the reviewed full-range
+// LiquidityAmounts integer formula, pulls the actual token balances, and
+// rejects zero liquidity like PancakeV3Pool.mint. Official code is separately
+// exercised in the local integration evidence, never inferred from this mock.
+use core::num::mul_div
+use std::evm::{StorageMap, wei}
+use ingot::{Riddle, Erc20}
+use ingot::ieo::LockerMsg
+use ingot::locker::{
+    Locker,
+    LockerViews,
+    PositionManagerMsg,
+    PoolStateMsg,
+    WbnbMsg,
+    TICK_LOWER,
+    TICK_UPPER,
+}
+use ingot::distributor::{Distributor, DistributorMsg, MiningPoolView}
+
+const Q96: u256 = 0x1000000000000000000000000
+// TickMath.getSqrtRatioAtTick(-887250 / +887250) at spacing50.
+const LOWER: u256 = 4_299_855_743
+const UPPER: u256 = 1_459_840_076_248_373_162_167_899_255_275_506_587_012_164_559_123
+const E18: u256 = 1_000_000_000_000_000_000
+const DEV: u256 = 0xde5
+
+pub msg LifecycleNpmMsg {
+    #[selector = sol("setFixturePrice(uint256)")]
+    SetPrice { price: u256 } -> bool,
+    #[selector = sol("managerCounts()")]
+    Counts -> (u256, u256, u256),
+}
+
+pub contract LifecycleWbnb uses (ctx: Ctx) {
+    mut bal: StorageMap<Address, u256>,
+    mut allowed: StorageMap<(Address, Address), u256>,
+
+    recv WbnbMsg {
+        #[payable]
+        Deposit -> () uses (ctx, mut bal) {
+            bal.set(
+                key: ctx.caller(),
+                value: bal.get(key: ctx.caller()) + ctx.value().as_wei(),
+            )
+        }
+    }
+    recv Erc20 {
+        Name -> String<10> {
+            "WrappedBNB"
+        }
+        Symbol -> String<3> {
+            "WBN"
+        }
+        Decimals -> u8 {
+            18
+        }
+        TotalSupply -> u256 {
+            0
+        }
+        BalanceOf { account } -> u256 uses bal {
+            bal.get(key: account)
+        }
+        Allowance { owner, spender } -> u256 uses allowed {
+            allowed.get(key: (owner, spender))
+        }
+        Approve { spender, amount } -> bool uses (ctx, mut allowed) {
+            allowed.set(key: (ctx.caller(), spender), value: amount)
+            true
+        }
+        Transfer { to, amount } -> bool uses (ctx, mut bal) {
+            let before = bal.get(key: ctx.caller())
+            assert!(before >= amount, "WBNB balance")
+            bal.set(key: ctx.caller(), value: before - amount)
+            bal.set(key: to, value: bal.get(key: to) + amount)
+            true
+        }
+        TransferFrom { from, to, amount } -> bool
+        uses (ctx, mut bal, mut allowed)
+        {
+            let allowance = allowed.get(key: (from, ctx.caller()))
+            assert!(allowance >= amount, "WBNB allowance")
+            let before = bal.get(key: from)
+            assert!(before >= amount, "WBNB balance")
+            allowed.set(key: (from, ctx.caller()), value: allowance - amount)
+            bal.set(key: from, value: before - amount)
+            bal.set(key: to, value: bal.get(key: to) + amount)
+            true
+        }
+    }
+}
+
+struct ManagerState {
+    t0: Address,
+    t1: Address,
+    price: u256,
+    minted: u256,
+    increased: u256,
+    collected: u256,
+}
+
+fn fixture_liquidity(_ price: u256, _ a0: u256, _ a1: u256) -> u256 {
+    if price <= LOWER {
+        return mul_div(a0, mul_div(LOWER, UPPER, Q96), UPPER - LOWER)
+    }
+    if price >= UPPER {
+        return mul_div(a1, Q96, UPPER - LOWER)
+    }
+    let l0 = mul_div(a0, mul_div(price, UPPER, Q96), UPPER - price)
+    let l1 = mul_div(a1, Q96, price - LOWER)
+    if l0 < l1 { l0 } else { l1 }
+}
+
+fn ceil_div(_ numerator: u256, _ denominator: u256) -> u256 {
+    numerator / denominator + if numerator % denominator == 0 { 0 } else { 1 }
+}
+
+fn fixture_amounts(_ price: u256, _ liquidity: u256) -> (u256, u256) {
+    let numerator = liquidity << 96
+    if price <= LOWER {
+        (ceil_div(numerator - mul_div(numerator, LOWER, UPPER), LOWER), 0)
+    } else if price >= UPPER {
+        (0, ceil_div(liquidity * (UPPER - LOWER), Q96))
+    } else {
+        // ceil(n*(B-P)/B) = n-floor(n*P/B); no intermediate product overflow.
+        (
+            ceil_div(numerator - mul_div(numerator, price, UPPER), price),
+            ceil_div(liquidity * (price - LOWER), Q96),
+        )
+    }
+}
+
+// Reduced mock intentionally bounds amount arithmetic to these test fixtures.
+// Its liquidity/zero behavior is independently checked on official V3 code.
+pub contract LifecycleNpm uses (ctx: Ctx, call: mut Call) {
+    mut state: ManagerState,
+    recv LifecycleNpmMsg {
+        SetPrice { price } -> bool uses (mut state) {
+            state.price = price
+            true
+        }
+        Counts -> (u256, u256, u256) uses state {
+            (state.minted, state.increased, state.collected)
+        }
+    }
+    recv PoolStateMsg {
+        Slot0 -> (u256, i32, u16, u16, u16, u32, bool)
+        uses state
+        {
+            (state.price, 0, 0, 1, 1, 0, true)
+        }
+    }
+    recv PositionManagerMsg {
+        CreatePool { token0, token1, fee: _, sqrt_price_x96 } -> Address
+        uses (ctx, mut state)
+        {
+            state.t0 = token0
+            state.t1 = token1
+            if state.price == 0 {
+                state.price = sqrt_price_x96
+            }
+            ctx.address()
+        }
+        Mint {
+            token0: _,
+            token1: _,
+            fee: _,
+            tick_lower,
+            tick_upper,
+            amount0_desired,
+            amount1_desired,
+            amount0_min,
+            amount1_min,
+            recipient: _,
+            deadline: _,
+        } -> (u256, u256, u256, u256)
+        uses (ctx, mut state, mut call)
+        {
+            assert!(tick_lower == TICK_LOWER && tick_upper == TICK_UPPER)
+            let liquidity = fixture_liquidity(state.price, amount0_desired, amount1_desired)
+            assert!(liquidity > 0, "zero liquidity")
+            let (a0, a1) = fixture_amounts(state.price, liquidity)
+            assert!(a0 <= amount0_desired && a1 <= amount1_desired)
+            assert!(
+                a0 >= amount0_min && a1 >= amount1_min,
+                "Price slippage check",
+            )
+            let ok0: bool = call
+                .call(
+                    addr: state.t0,
+                    gas: 150_000,
+                    value: Wei::zero(),
+                    message: Erc20::TransferFrom {
+                        from: ctx.caller(),
+                        to: ctx.address(),
+                        amount: a0,
+                    },
+                )
+            let ok1: bool = call
+                .call(
+                    addr: state.t1,
+                    gas: 150_000,
+                    value: Wei::zero(),
+                    message: Erc20::TransferFrom {
+                        from: ctx.caller(),
+                        to: ctx.address(),
+                        amount: a1,
+                    },
+                )
+            assert!(ok0 && ok1)
+            state.minted += 1
+            (1, liquidity, a0, a1)
+        }
+        IncreaseLiquidity {
+            token_id,
+            amount0_desired,
+            amount1_desired,
+            amount0_min,
+            amount1_min,
+            deadline: _,
+        } -> (u256, u256, u256)
+        uses (ctx, mut state, mut call)
+        {
+            assert!(token_id == 1)
+            let liquidity = fixture_liquidity(state.price, amount0_desired, amount1_desired)
+            assert!(liquidity > 0, "zero liquidity")
+            let (a0, a1) = fixture_amounts(state.price, liquidity)
+            assert!(a0 <= amount0_desired && a1 <= amount1_desired)
+            assert!(
+                a0 >= amount0_min && a1 >= amount1_min,
+                "Price slippage check",
+            )
+            let ok0: bool = call
+                .call(
+                    addr: state.t0,
+                    gas: 150_000,
+                    value: Wei::zero(),
+                    message: Erc20::TransferFrom {
+                        from: ctx.caller(),
+                        to: ctx.address(),
+                        amount: a0,
+                    },
+                )
+            let ok1: bool = call
+                .call(
+                    addr: state.t1,
+                    gas: 150_000,
+                    value: Wei::zero(),
+                    message: Erc20::TransferFrom {
+                        from: ctx.caller(),
+                        to: ctx.address(),
+                        amount: a1,
+                    },
+                )
+            assert!(ok0 && ok1)
+            state.increased += 1
+            (liquidity, a0, a1)
+        }
+        Collect { token_id, recipient: _, amount0_max: _, amount1_max: _ } -> (u256, u256)
+        uses (mut state)
+        {
+            assert!(token_id == 1)
+            state.collected += 1
+            (0, 0)
+        }
+    }
+}
+
+pub contract LifecycleMining {
+    recv MiningPoolView {
+        Available -> u256 {
+            1
+        }
+    }
+}
+
+struct Fixture {
+    locker: Address,
+    token: Address,
+    wbnb: Address,
+    npm: Address,
+    dist: Address,
+    mining: Address,
+}
+
+fn fixture() -> Fixture uses (evm: mut Evm) {
+    let me = evm.address()
+    let wbnb = evm.create<LifecycleWbnb>(value: Wei::zero(), args: ())
+    let mining = evm.create<LifecycleMining>(value: Wei::zero(), args: ())
+    let npm = evm.create<LifecycleNpm>(value: Wei::zero(), args: ())
+    let dist = evm
+        .create<Distributor>(
+            value: Wei::zero(),
+            args: (mining, Address::new(DEV), wbnb, Duration::zero()),
+        )
+    let token = evm.create<Riddle>(value: Wei::zero(), args: (me, mining, dist, wbnb, npm))
+    let locker = evm.create<Locker>(value: Wei::zero(), args: (me, token, wbnb, npm, dist))
+    let _: bool = evm
+        .call(
+            addr: dist,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: DistributorMsg::Bind { token, locker },
+        )
+    Fixture { locker, token, wbnb, npm, dist, mining }
+}
+
+fn token_balance(_ token: Address, _ owner: Address) -> u256
+uses (evm: mut Evm)
+{
+    evm.call(
+        addr: token,
+        gas: 100_000,
+        value: Wei::zero(),
+        message: Erc20::BalanceOf { account: owner },
+    )
+}
+
+fn send_asset(_ token: Address, _ to: Address, _ amount: u256)
+uses (evm: mut Evm)
+{
+    let _: bool = evm
+        .call(
+            addr: token,
+            gas: 200_000,
+            value: Wei::zero(),
+            message: Erc20::Transfer { to, amount },
+        )
+}
+
+fn set_price(_ npm: Address, _ price: u256) uses (evm: mut Evm) {
+    let _: bool = evm
+        .call(
+            addr: npm,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: LifecycleNpmMsg::SetPrice { price },
+        )
+}
+
+fn seed_fixture(_ s: Fixture) uses (evm: mut Evm) {
+    send_asset(s.token, s.locker, E18)
+    let _: bool = evm
+        .call(
+            addr: s.locker,
+            gas: 9_000_000,
+            value: wei(E18),
+            message: LockerMsg::Seed { tokens: E18 },
+        )
+    assert!(
+        token_balance(s.token, s.locker) == 0 && token_balance(s.wbnb, s.locker) == 0,
+        "mock must actually consume seed",
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn lifecycle_seed_rejects_preinitialized_wrong_price_without_consuming_assets()
+uses (evm: mut Evm)
+{
+    let s = fixture()
+    set_price(s.npm, Q96 * 4)
+    send_asset(s.token, s.locker, E18)
+    let before = evm.balance(evm.address())
+    let seeded = evm
+        .try_call(
+            addr: s.locker,
+            gas: 9_000_000,
+            value: wei(E18),
+            message: LockerMsg::Seed { tokens: E18 },
+        )
+    assert!(!seeded.success(), "wrong launch price consumed assets")
+    assert!(
+        evm.balance(evm.address()) == before && evm.balance(s.locker) == Wei::zero(),
+    )
+    assert!(
+        token_balance(s.token, s.locker) == E18 && token_balance(s.token, s.npm) == 0,
+    )
+    assert!(
+        token_balance(s.wbnb, s.locker) == 0 && token_balance(s.wbnb, s.npm) == 0,
+    )
+    let id: u256 = evm
+        .call(
+            addr: s.locker,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: LockerViews::TokenId {},
+        )
+    let (mints, increases, _collects): (u256, u256, u256) = evm
+        .call(
+            addr: s.npm,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: LifecycleNpmMsg::Counts {},
+        )
+    assert!(id == 0 && mints == 0 && increases == 0)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn lifecycle_rdl_only_distribution_completes_with_lp_assets_retained()
+uses (evm: mut Evm)
+{
+    let s = fixture()
+    seed_fixture(s)
+    send_asset(s.token, s.dist, 1_000 * E18)
+    let distribution = evm
+        .try_call(
+            addr: s.dist,
+            gas: 3_000_000,
+            value: Wei::zero(),
+            message: DistributorMsg::Distribute {},
+        )
+    assert!(
+        distribution.success(),
+        "zero-liquidity increase blocked distribution",
+    )
+    let (rdl, wbnb): (u256, u256) = distribution.decode()
+    assert!(rdl == 1_000 * E18 && wbnb == 0)
+    assert!(token_balance(s.token, Address::new(0xdead)) == 250 * E18)
+    assert!(token_balance(s.token, s.locker) == 250 * E18)
+    assert!(token_balance(s.token, Address::new(DEV)) == 500 * E18)
+    assert!(
+        token_balance(s.token, s.dist) == 0 && token_balance(s.wbnb, s.locker) == 0,
+    )
+    let (_mints, increases, collects): (u256, u256, u256) = evm
+        .call(
+            addr: s.npm,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: LifecycleNpmMsg::Counts {},
+        )
+    assert!(increases == 0 && collects == 1)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn lifecycle_two_asset_dust_increase_waits_without_reverting()
+uses (evm: mut Evm)
+{
+    let s = fixture()
+    seed_fixture(s)
+    set_price(s.npm, Q96 / 4)
+    send_asset(s.token, s.locker, 1)
+    let _: () = evm.call(
+            addr: s.wbnb,
+            gas: 100_000,
+            value: wei(1),
+            message: WbnbMsg::Deposit {},
+        )
+    send_asset(s.wbnb, s.locker, 1)
+    let increased = evm
+        .try_call(
+            addr: s.locker,
+            gas: 2_000_000,
+            value: Wei::zero(),
+            message: LockerViews::Increase {},
+        )
+    assert!(
+        increased.success(),
+        "two-sided rounded-zero liquidity must wait",
+    )
+    let liquidity: u256 = increased.decode()
+    assert!(
+        liquidity == 0
+            && token_balance(s.token, s.locker) == 1
+            && token_balance(s.wbnb, s.locker) == 1,
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn lifecycle_wait_is_permissionless_and_resumes_with_paired_assets()
+uses (evm: mut Evm)
+{
+    let s = fixture()
+    seed_fixture(s)
+    let empty: u256 = evm
+        .call(
+            addr: s.locker,
+            gas: 2_000_000,
+            value: Wei::zero(),
+            message: LockerViews::Increase {},
+        )
+    assert!(empty == 0)
+    send_asset(s.token, s.dist, 1_000 * E18)
+    let _: (u256, u256) = evm
+        .call(
+            addr: s.dist,
+            gas: 3_000_000,
+            value: Wei::zero(),
+            message: DistributorMsg::Distribute {},
+        )
+    let wait: u256 = evm
+        .call(
+            addr: s.locker,
+            gas: 2_000_000,
+            value: Wei::zero(),
+            message: LockerViews::Increase {},
+        )
+    assert!(wait == 0 && token_balance(s.token, s.locker) == 250 * E18)
+    let _: () = evm
+        .call(
+            addr: s.wbnb,
+            gas: 100_000,
+            value: wei(100 * E18),
+            message: WbnbMsg::Deposit {},
+        )
+    send_asset(s.wbnb, s.dist, 100 * E18)
+    let _: (u256, u256) = evm
+        .call(
+            addr: s.dist,
+            gas: 3_000_000,
+            value: Wei::zero(),
+            message: DistributorMsg::Distribute {},
+        )
+    assert!(
+        token_balance(s.token, s.locker) == 200 * E18 && token_balance(s.wbnb, s.locker) == 0,
+    )
+    assert!(token_balance(s.wbnb, Address::new(DEV)) == 50 * E18)
+    let (_mints, increases, collects): (u256, u256, u256) = evm
+        .call(
+            addr: s.npm,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: LifecycleNpmMsg::Counts {},
+        )
+    assert!(increases == 1 && collects == 2)
+    let rdl_allowance: u256 = evm
+        .call(
+            addr: s.token,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: Erc20::Allowance { owner: s.locker, spender: s.npm },
+        )
+    let wbnb_allowance: u256 = evm
+        .call(
+            addr: s.wbnb,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: Erc20::Allowance { owner: s.locker, spender: s.npm },
+        )
+    assert!(rdl_allowance == 0 && wbnb_allowance == 0)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000)]
+fn lifecycle_wbnb_only_distribution_keeps_the_exact_split()
+uses (evm: mut Evm)
+{
+    let s = fixture()
+    seed_fixture(s)
+    let _: () = evm
+        .call(
+            addr: s.wbnb,
+            gas: 100_000,
+            value: wei(100 * E18),
+            message: WbnbMsg::Deposit {},
+        )
+    send_asset(s.wbnb, s.dist, 100 * E18)
+    let (rdl, wbnb): (u256, u256) = evm
+        .call(
+            addr: s.dist,
+            gas: 3_000_000,
+            value: Wei::zero(),
+            message: DistributorMsg::Distribute {},
+        )
+    assert!(rdl == 0 && wbnb == 100 * E18)
+    assert!(
+        token_balance(s.wbnb, s.locker) == 50 * E18
+            && token_balance(s.wbnb, Address::new(DEV)) == 50 * E18,
+    )
+}
+
+#[test(should_revert)]
+fn lifecycle_increase_before_seed_is_still_rejected() uses (evm: mut Evm) {
+    let s = fixture()
+    let _: u256 = evm
+        .call(
+            addr: s.locker,
+            gas: 2_000_000,
+            value: Wei::zero(),
+            message: LockerViews::Increase {},
+        )
+}
