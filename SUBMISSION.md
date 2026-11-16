@@ -74,7 +74,7 @@ Deploy order and binding are in the README.
 
 ```sh
 fe --version   # fe 26.5.0
-fe test        # 51 tests
+fe test        # run the current suite; the original submission had 51 tests
 fe build
 ```
 

@@ -1,0 +1,4 @@
+# Versions exercised by the security-hardening regression suite.
+eth-account==0.14.0
+pycryptodome==3.24.1
+coincurve==21.0.0

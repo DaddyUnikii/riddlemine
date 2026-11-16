@@ -49,3 +49,53 @@ this order and bound once by the deployer:
 2. `Riddle(ieo, mining, distributor, wbnb, npm)` (computes its own v3 pool address)
 3. `Locker(ieo, token, wbnb, npm, fee_to = distributor)`
 4. `ieo.bind(token, locker)`, `mining.bind(token)`, `distributor.bind(token, locker)`
+
+## Security revision and reproducible checks
+
+The security-hardening branch blocks `exitEarly()` until launch, ignores
+zero-token operations when starting tax decay, and clears both finite LP
+allowances after mint/increase. The original testnet addresses recorded in
+`deployments/bsc-testnet.json` are not upgraded by source changes: these
+contracts are not upgradeable.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+fe fmt --check
+fe test
+fe build
+.venv/bin/python -m unittest discover -s tests -p 'test_deploy_preflight.py' -v
+.venv/bin/python -m unittest discover -s tests -p 'test_voucher_cli.py' -v
+```
+
+Time-dependent tax regressions exercise built Fe bytecode on Anvil 1.9.0:
+
+```sh
+# Terminal 1: disposable local chain only, no keys or public funds required.
+anvil --host 127.0.0.1 --port 18556 --chain-id 97 --silent
+# Terminal 2:
+LOCAL_EVM_RPC=http://127.0.0.1:18556 .venv/bin/python -m unittest discover -s tests -v
+```
+
+With `LOCAL_EVM_RPC` unset, the four Anvil tests explicitly skip; that is not
+an EVM validation pass. The test harness rejects non-loopback RPC URLs.
+
+`deploy_testnet.py` verifies chain 97, non-empty dependency code, the manager's
+WBNB/factory identity, the pool deployer and tick spacing before reading a key
+or creating a signer. These are compatibility checks, not certification of
+the selected contracts. Run a read-only preflight without signing:
+
+```sh
+PYTHONPATH=scripts .venv/bin/python -c 'from deploy_testnet import preflight; print(preflight())'
+```
+
+The voucher CLI reads a key file instead of exposing it in process arguments:
+
+```sh
+BOT_KEY_FILE=/secure/path/bot.key .venv/bin/python scripts/voucher.py 97 0xMINER_ADDRESS DAY
+```
+
+Keep key files outside the repo with mode `0600`; use ignored `secrets/` if a
+local directory is unavoidable. Never pass private keys in CLI arguments or
+commit bidder-key JSON files. The pinned Python versions and verified Fe
+binary checksum used in CI match those exercised locally.

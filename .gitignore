@@ -1,3 +1,9 @@
 out/
 deployments/*.local.json
-scripts/__pycache__/
+__pycache__/
+.venv/
+.env
+.env.*
+secrets/
+*.key
+bidders*.json
