@@ -83,9 +83,35 @@ The scripts need Python 3 with `eth-account` and `pycryptodome`
 
 ## Demo
 
-Live on BSC testnet (chain 97), deployed with `scale = 10,000` so the sale
-fits faucet BNB. Addresses and every transaction are in
-`deployments/bsc-testnet.json`.
+Two deployments exist on BSC testnet (chain 97), both with `scale = 10,000` so
+the sale fits faucet BNB. The **current** one is recorded in
+`deployments/bsc-testnet-v2-20261117.json`; the earlier one stays in
+`deployments/bsc-testnet.json` for provenance.
+
+### Current deployment (v2, built from commit `48aede7`, fe 26.5.0)
+
+| | Address |
+| --- | --- |
+| RDL | [0xa68e47A564ad58a79c2FF34fADcf978f9B241173](https://testnet.bscscan.com/address/0xa68e47A564ad58a79c2FF34fADcf978f9B241173) |
+| Ieo | [0xe6E5c82cC368933B9d0C5c18Bf442dc8E2F51674](https://testnet.bscscan.com/address/0xe6E5c82cC368933B9d0C5c18Bf442dc8E2F51674) |
+| Mining | [0xE955BB6c37Ab4b50794A664787D4adc2d1a89091](https://testnet.bscscan.com/address/0xE955BB6c37Ab4b50794A664787D4adc2d1a89091) |
+| Locker | [0xFDb30952700d927C7343842a1f2A6e3a40f472a1](https://testnet.bscscan.com/address/0xFDb30952700d927C7343842a1f2A6e3a40f472a1) |
+| Distributor | [0x9835d8A2037928721652dFBa6F286F3a1868ea12](https://testnet.bscscan.com/address/0x9835d8A2037928721652dFBa6F286F3a1868ea12) |
+| SwapAdapter | [0x1677AdF91F0CF8995CE61128ff9B109b74201509](https://testnet.bscscan.com/address/0x1677AdF91F0CF8995CE61128ff9B109b74201509) |
+| RDL/WBNB pool | [0x05F0089C22f9316d135eBDB9269A1Ceef39ecdaD](https://testnet.bscscan.com/address/0x05F0089C22f9316d135eBDB9269A1Ceef39ecdaD) |
+
+The sale filled 100/100 participants, settled every buyer, and launched with
+`lpTokenId` 41368. `state()` reads `2` (SUCCESS) and `launched()` reads `1`.
+
+**BscScan cannot verify these contracts.** They are compiled by `fe`, not
+`solc`, and Verify & Publish only accepts Solidity source or
+Solidity standard-json input. Verification here means *reproducible build*:
+rebuild commit `48aede7` with fe 26.5.0 and compare hashes. The recorded
+creation/runtime hashes and the on-chain code hashes -- the latter matching
+6/6 contracts -- are in `deployments/bsc-testnet-v2-20261117.json` and the
+operator's `code-evidence.json`.
+
+### Earlier deployment (v1)
 
 | | Address |
 | --- | --- |
