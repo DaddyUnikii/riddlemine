@@ -1,0 +1,58 @@
+{
+  "chainId": 97,
+  "network": "BSC testnet",
+  "deploymentId": "v2-20261117T0952Z",
+  "sourceCommit": "48aede76fbcf34139c7571776dc2d045ed679fe8",
+  "sourceTree": "a7cac2ba034141bd1512fe2a9d49abaeb910f342",
+  "compiler": "fe 26.5.0 (3dab95f)",
+  "scale": 10000,
+  "ieoSeconds": 1800,
+  "deployer": "0xa415cB9b6713ad468C40C1c0A22250691e30B73e",
+  "bot": "0x225DcCdC50ea444f225F3b18F8FeDa41b5DB35BB",
+  "wbnb": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
+  "npm": "0x427bF5b37357632377eCbEC9de3626C71A5396c1",
+  "factory": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+  "ieo": "0xe6E5c82cC368933B9d0C5c18Bf442dc8E2F51674",
+  "mining": "0xE955BB6c37Ab4b50794A664787D4adc2d1a89091",
+  "distributor": "0x9835d8A2037928721652dFBa6F286F3a1868ea12",
+  "token": "0xa68e47A564ad58a79c2FF34fADcf978f9B241173",
+  "locker": "0xFDb30952700d927C7343842a1f2A6e3a40f472a1",
+  "swapAdapter": "0x1677AdF91F0CF8995CE61128ff9B109b74201509",
+  "pool": "0x05F0089C22f9316d135eBDB9269A1Ceef39ecdaD",
+  "poolFee": 2500,
+  "lpTokenId": 41368,
+  "sale": {
+    "mode": "bid",
+    "participants": 100,
+    "settledCount": 100,
+    "state": "SUCCESS",
+    "soldTokensWei": "50000000000000000000000000",
+    "raisedWei": "20000000000000000"
+  },
+  "transactions": {
+    "deployCore": 8,
+    "finalize": "0xef29292aad1b5bafc20982dc5aa85af0ad584af791ad1237bf4544c7422146c2",
+    "settle": [
+      "0xa6671c4f58aebbaf155537898e7a97239cc73e0f06a2296df28261e67d2e45a7",
+      "0x844dce741a61bdebfef9e7dfa118bcd835a4a87b9dc1ed0ad4bfd3dbd4a16092",
+      "0x943e7c9cb2b2333ec1d47da776a2458ba065b64a2e9cd2a62dafcd1cb0ca0f8a",
+      "0x8ce6ab733c88a63428d88f7fa732fa539feaa5b067295b778f7ffde8ce522bf7"
+    ],
+    "launch": "0x1f685e993aba3e76b98892e6573ef19c328112f8025b1addbede69db2be07683",
+    "swapAdapterDeploy": "0x4ef6bff035ed30e53ae34cf39f4edb85c29ef3ac4a3ddc7163f1e1038418631b"
+  },
+  "artifactSha256": {
+    "Ieo": "034c1c511987a8753edf8ec5cf663546bbd41cd4d754a8f418e6775c21be7827",
+    "Mining": "3171c5085247d6f04af773e7cddf8e18ed6a5b76f5224dd16d62d0b9c702360b",
+    "Distributor": "c31049221f8f7e9e309714f2a48ee72a44f7f038df46bb441b11d2b9cba4c8f7",
+    "Riddle": "dc2d07ca6a9aa3ecd1a5be7f0d08af7f5a3d51128524ac8a21c58b2aacce2253",
+    "Locker": "da6a292bf95aedea3d6e53e8f909f20c9ed595f3b430b06242c1da9aed3bc95e",
+    "SwapAdapter": "dcb1d39c556d07efc9ace9d1caf59274ad238281440926e38b42a8a621908879"
+  },
+  "notes": [
+    "Supersedes the v1 BSC testnet deployment in bsc-testnet.json, which is preserved unchanged.",
+    "Deployed from the reviewed commit after PR #12 merged; deployer key never persisted or logged.",
+    "Sale filled 100/100 participants and settled; launch created and seeded the 0.25% RDL/WBNB pool.",
+    "Source verification on BscScan is not yet performed."
+  ]
+}
