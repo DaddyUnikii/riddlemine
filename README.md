@@ -54,7 +54,7 @@ this order and bound once by the deployer:
 
 ## Security revision and reproducible checks
 
-The security-hardening branch blocks `exitEarly()` until launch, ignores
+The security revision blocks `exitEarly()` until launch, ignores
 zero-token operations when starting tax decay, and clears both finite LP
 allowances after mint/increase. It also rejects sale scales that round the
 advertised minimum/first-slot price to zero, refuses a preinitialized pool at
@@ -66,7 +66,7 @@ contracts are not upgradeable.
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
 fe fmt --check
 fe test
 fe build
@@ -88,7 +88,11 @@ With `LOCAL_EVM_RPC` unset, the seven tax-clock Anvil tests explicitly skip.
 With `RUN_LOCAL_V3` unset, the optional genuine-V3 classes explicitly skip;
 neither skip is an EVM validation pass. The adapter unit EVM class owns its
 own disposable loopback chain31337 and must execute, not skip. Set `FE_BIN` to
-the pinned Fe26.5.0 binary if it is not on `PATH`. CI enables both groups.
+the pinned Fe26.5.0 binary if it is not on `PATH`. CI enables both groups and
+fails on a skipped suite, zero executed tests, or a test/setup failure. Its
+separate provenance job replays the pinned Solidity inputs and compares all
+five official creation bytecodes exactly. `requirements.lock` includes direct
+and transitive package hashes; CI installs it on Python 3.11.
 
 `Riddle.currentTaxBps()` returns the rate a qualifying transfer would use
 right now (500 bps before the first positive pool transfer). `pool()`,
@@ -112,8 +116,9 @@ BOT_KEY_FILE=/secure/path/bot.key .venv/bin/python scripts/voucher.py 97 0xMINER
 
 Keep key files outside the repo with mode `0600`; use ignored `secrets/` if a
 local directory is unavoidable. Never pass private keys in CLI arguments or
-commit bidder-key JSON files. The pinned Python versions and verified Fe
-binary checksum used in CI match those exercised locally.
+commit bidder-key JSON files. The Fe binary is checksum-verified and Python
+package versions are hash-pinned; interpreter compatibility is exercised by
+CI rather than inferred from package metadata.
 
 ## Net-aware swaps: keep both buy and sell tax
 
@@ -166,12 +171,39 @@ for compiler inputs, hashes, license and rebuild instructions.
 
 `scripts/deploy_swap_adapter.py` is **read-only by default**, requires chain97,
 and checks current token views, pool CREATE2 identity, factory registry,
-fee/tokens and code before any signer/key boundary. Supplying `--deploy` is an
-explicit public transaction path, not used during this revision:
+fee/tokens and code before any signer/key boundary. Post-deploy code and all
+three adapter bindings are read at the receipt's block, not a moving head.
+Supplying `--deploy` is an explicit public transaction path; it requires a
+securely provisioned signer and a newly deployed token with the tax views:
 
 ```sh
 TOKEN=0xYOUR_REVISED_TOKEN .venv/bin/python scripts/deploy_swap_adapter.py
 ```
+
+## Testnet deployment boundary
+
+The addresses in `deployments/bsc-testnet.json` remain the historical,
+non-upgradeable core. A revision requires **five fresh linked core contracts**
+(IEO, Mining, Distributor, Riddle, Locker), their one-time binds, a successful
+new sale and launch, and then the adapter. Mining and Distributor cannot simply
+be reused: their existing bindings point at the historical core.
+
+Run deployment only from a new isolated execution directory containing the
+reviewed scripts and freshly rebuilt artifacts, **without** the historical
+manifest. Set `DEPLOYMENTS_FILE` and `ADAPTER_DEPLOYMENTS_FILE` to that new run.
+The demo readers still use the relative path `deployments/bsc-testnet.json`, so
+an environment override alone is insufficient: never run those demos from the
+parent checkout. Keep per-transaction receipts and constructor/artifact hashes
+outside the scripts' final-only manifest, and do not blindly restart after a
+partial/ambiguous broadcast. The deployer must be exclusive while the IEO predicts
+the next CREATE address for Mining.
+
+At mode 0 / scale 10000, a successful sale needs at least 0.02 test BNB in bids
+and the per-wallet cap is 0.0002 test BNB (100 capped participants). Budget
+transaction gas separately; funding the deployer alone does not launch the pool.
+Do not switch scales or remove sell tax to make deployment easier. Public
+signer/key-file provisioning is separate from passing local tests. Do not send
+private keys or seed phrases through chat.
 
 Remaining limits: a wrongly preinitialized price can still stall launch (no
 recovery policy added); postlaunch LP increase still has zero amount minima

@@ -325,6 +325,107 @@ class AdapterUnitEvmTests(unittest.TestCase):
         self.assertEqual(self.view(self.adapter,"wbnb()"),int(self.wbnb,16))
         self.assertEqual(self.view(self.adapter,"pool()"),int(self.pool,16))
 
+    def test_historical_token_without_tax_views_fails_at_pool_selector(self):
+        # This is the manifest-pinned 5e5719e source baseline, not a claim about
+        # any deployed testnet runtime. Rebuild it before using the artifact.
+        fixture = ROOT / "tests/fixtures/pancake_v3"
+        manifest = json.loads((fixture / "artifacts/manifest.json").read_text())
+        self.assertEqual(manifest["rdl_revision"], "5e5719ee389318d06493870c42670a509692a2ea")
+        from hashlib import sha256
+        for relative in ("sources/rdl-current/src/lib.fe", "artifacts/Riddle.bin", "artifacts/Riddle.runtime.bin"):
+            self.assertEqual(sha256((fixture / relative).read_bytes()).hexdigest(), manifest["files"][relative]["sha256"])
+        evidence = ROOT / ".local-evidence" / (os.environ.get("EVIDENCE_RUN", "latest") + "-legacy-witness")
+        evidence.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [FE, "build", str(fixture / "sources/rdl-current/src/lib.fe"), "--standalone",
+             "--contract", "Riddle", "--out-dir", str(evidence / "bytecode"), "--emit", "bytecode,runtime-bytecode,abi"],
+            cwd=ROOT, capture_output=True, text=True, timeout=180,
+        )
+        (evidence / "build.json").write_text(json.dumps({"command": result.args, "exit_code": result.returncode,
+                                                       "output": result.stdout + result.stderr}, indent=2))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in ("Riddle.bin", "Riddle.runtime.bin"):
+            self.assertEqual(bytes.fromhex((evidence / "bytecode" / name).read_text().strip().removeprefix("0x")),
+                             bytes.fromhex((fixture / "artifacts" / name).read_text().strip().removeprefix("0x")))
+        baseline = (fixture / "artifacts/Riddle.bin").read_text().strip().removeprefix("0x")
+        code = baseline + b"".join(word(value) for value in
+                                   (self.owner, self.accounts[3], self.dist, self.wbnb, self.npm)).hex()
+        legacy_receipt = self.tx(data="0x" + code)
+        legacy = legacy_receipt["contractAddress"]
+        runtime = self.rpc("eth_getCode", [legacy, legacy_receipt["blockNumber"]])
+        self.assertEqual(bytes.fromhex(runtime[2:]), bytes.fromhex((fixture / "artifacts/Riddle.runtime.bin").read_text().strip()))
+        self.assertEqual(self.view(legacy, "totalSupply()"), 10**27)
+        self.assertEqual(self.balance(legacy, self.owner), 180 * 10**24)
+        pool = bound_pool(legacy, self.wbnb)
+        self.assertNotEqual(pool, self.pool, "legacy control must have its own CREATE2-derived pool")
+        for target, name in [(pool, "UnitAdapterPool"), (FACTORY, "UnitAdapterFactory")]:
+            runtime = (ROOT / "out" / (name + ".runtime.bin")).read_text().strip().removeprefix("0x")
+            self.rpc("anvil_setCode", [target, "0x" + runtime])
+        self.tx(pool, calldata("configure(address,address,uint256,uint256)", legacy, self.wbnb, 0, 0))
+        self.tx(FACTORY, calldata("configure(address)", pool))
+        for target in (legacy, self.wbnb, pool, FACTORY):
+            self.assertNotEqual(self.rpc("eth_getCode", [target, "latest"]), "0x", target)
+        token0, token1 = sorted((int(legacy, 16), int(self.wbnb, 16)))
+        self.assertEqual((self.view(pool, "token0()"), self.view(pool, "token1()")), (token0, token1),
+                         "legacy pool metadata fixture is not the configured CREATE2 pair")
+        self.assertEqual(self.view(pool, "fee()"), 2500)
+        self.assertEqual(self.view(pool, "factory()"), int(FACTORY, 16))
+        self.assertEqual(self.view(FACTORY, "getPool(address,address,uint24)", token0, token1, 2500), int(pool, 16))
+        missing_views = ("pool()", "positionManager()", "distributor()", "currentTaxBps()")
+        for signature in missing_views:
+            with self.subTest(missing_view=signature), self.assertRaisesRegex(RuntimeError, "execution reverted"):
+                self.rpc("eth_call", [{"to": legacy, "data": calldata(signature)}, "latest"])
+            error = self.transcript[-1]["response"]["error"]
+            self.assertEqual(error["code"], 3)
+            self.assertEqual(error["data"], "0x")
+        adapter_code = (ROOT / "out/SwapAdapter.bin").read_text().strip().removeprefix("0x")
+        payload = "0x" + adapter_code + b"".join(word(value) for value in (legacy, self.wbnb, pool)).hex()
+        failed = self.tx(data=payload, success=False)
+        trace = self.rpc("debug_traceTransaction", [failed["transactionHash"], {"tracer": "callTracer"}])
+        (evidence / "legacy-constructor.json").write_text(json.dumps({"receipt": failed, "trace": trace}, indent=2))
+        self.assertEqual(trace["type"], "CREATE")
+        self.assertEqual(trace["input"], payload)
+        self.assertEqual(trace["error"], "execution reverted")
+        calls = trace.get("calls", [])
+        self.assertEqual(len(calls), 1, "constructor must fail on the first TaxViews call, not pool metadata")
+        missing_pool = calls[0]
+        self.assertEqual(missing_pool["type"], "STATICCALL")
+        self.assertEqual(missing_pool["to"].lower(), legacy.lower())
+        self.assertEqual(missing_pool["input"], calldata("pool()"))
+        self.assertEqual(missing_pool["error"], "execution reverted")
+        self.assertEqual(missing_pool.get("output", "0x"), "0x")
+        self.assertEqual(missing_pool.get("calls", []), [])
+
+        # Same constructor bytecode + current Riddle reaches all binding and
+        # mock metadata calls successfully after restoring the factory control.
+        self.tx(FACTORY, calldata("configure(address)", self.pool))
+        positive_payload = "0x" + adapter_code + b"".join(word(value) for value in (self.token, self.wbnb, self.pool)).hex()
+        positive = self.tx(data=positive_payload)
+        positive_trace = self.rpc("debug_traceTransaction", [positive["transactionHash"], {"tracer": "callTracer"}])
+        (evidence / "current-constructor.json").write_text(json.dumps({"receipt": positive, "trace": positive_trace}, indent=2))
+        self.assertNotIn("error", positive_trace)
+        expected_calls = [(self.token, "pool()", self.pool), (self.token, "positionManager()", self.npm),
+                          (self.token, "distributor()", self.dist)]
+        current0, current1 = sorted((int(self.token, 16), int(self.wbnb, 16)))
+        expected_calls += [(self.pool, "token0()", current0), (self.pool, "token1()", current1),
+                           (self.pool, "fee()", 2500), (self.pool, "factory()", FACTORY)]
+        positive_calls = positive_trace.get("calls", [])
+        self.assertEqual(len(positive_calls), len(expected_calls) + 1)
+        for call, (target, signature, expected) in zip(positive_calls, expected_calls):
+            self.assertEqual(call["type"], "STATICCALL")
+            self.assertEqual(call["to"].lower(), target.lower())
+            self.assertEqual(call["input"], calldata(signature))
+            self.assertEqual(call["output"], "0x" + word(expected).hex())
+            self.assertNotIn("error", call)
+        registry = positive_calls[-1]
+        self.assertEqual(registry["type"], "STATICCALL")
+        self.assertEqual(registry["to"].lower(), FACTORY.lower())
+        self.assertEqual(registry["input"], calldata("getPool(address,address,uint24)", current0, current1, 2500))
+        self.assertEqual(registry["output"], "0x" + word(self.pool).hex())
+        self.assertNotIn("error", registry)
+        for signature, expected in (("token()", self.token), ("wbnb()", self.wbnb), ("pool()", self.pool)):
+            self.assertEqual(self.view(positive["contractAddress"], signature), int(expected, 16))
+
     def test_payment_token_reentry_is_blocked_with_outer_swap_successful(self):
         self.tx(self.wbnb,calldata("reentry(address)",self.adapter))
         self.swap("buyExactInput",1000,950)

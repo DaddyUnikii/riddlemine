@@ -113,9 +113,14 @@ def main(deploy=False):
     payload = bytecode + b"".join(int(out[key], 16).to_bytes(32, "big") for key in ("token", "wbnb", "pool"))
     receipt = signer.send(None, payload)
     adapter = address(receipt["contractAddress"], "adapter receipt")
-    require_code(adapter, "latest")
+    # Verify at the block that mined the deployment so the binding cannot be a
+    # later state; a moving head could resolve against an unrelated block.
+    confirmed_block = receipt.get("blockNumber")
+    if not isinstance(confirmed_block, str) or not confirmed_block.startswith("0x"):
+        raise RuntimeError("deploy receipt has no block number")
+    require_code(adapter, confirmed_block)
     for key in ("token", "wbnb", "pool"):
-        actual = read_address(adapter, key + "()", "latest")
+        actual = read_address(adapter, key + "()", confirmed_block)
         if actual.lower() != out[key].lower():
             raise RuntimeError("deployed adapter binding mismatch: " + key)
     out.update({"chainId": 97, "adapter": adapter, "deployer": signer.address, "transactionHash": receipt["transactionHash"]})

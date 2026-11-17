@@ -40,7 +40,9 @@ def main():
     if build.returncode:
         raise RuntimeError("fresh adapter build failed; see adapter-build.log")
     results = []
-    with module.run_fixture(args.root, out=out, fe_bin=args.fe, rpc_url="http://127.0.0.1:18561") as f:
+    with module.run_fixture(args.root, out=out, fe_bin=args.fe) as f:
+        # The fixture reserves its own ephemeral loopback port; a fixed port
+        # would collide with parallel runs and with other local chains.
         adapter_bin = adapter_artifacts / "SwapAdapter.bin"
         adapter, deployed = f.deploy_adapter(adapter_bin)
         module.save(out / "adapter-deploy-receipt.json", deployed)

@@ -181,7 +181,7 @@ class AdapterPreflightTests(unittest.TestCase):
         adapter = "0x000000000000000000000000000000000000ada1"
         fake = types.SimpleNamespace(
             address="0x000000000000000000000000000000000000f00d",
-            send=lambda target, payload: sent.append((target, payload)) or {"contractAddress": adapter, "transactionHash": "0xfixture"},
+            send=lambda target, payload: sent.append((target, payload)) or {"contractAddress": adapter, "transactionHash": "0xfixture", "blockNumber": "0x101"},
         )
         setattr(self.chain, "Signer", lambda _fixture: fake)
         self.code[adapter] = "0x6000"
@@ -198,6 +198,123 @@ class AdapterPreflightTests(unittest.TestCase):
         import json
         self.assertEqual(json.loads(self.output.read_text())["adapter"].lower(), adapter)
 
+    def install_post_deploy_fixture(self):
+        """Fake only the chain boundary; execute the real deployment script.
+
+        The head advances after send and deliberately differs from both the
+        preflight and receipt blocks. Each block has independently mutable data.
+        The placeholder passed to Signer is deliberately not a private key.
+        """
+        self.adapter_address = "0x000000000000000000000000000000000000ada1"
+        self.receipt_block = "0x101"
+        self.moving_head = "0x202"
+        self.receipt = {"contractAddress": self.adapter_address, "transactionHash": "0x" + "ab" * 32,
+                        "blockNumber": self.receipt_block, "status": "0x1"}
+        self.sent = []
+        self.post_deploy_reads = []
+        valid = {"token()": TOKEN, "wbnb()": WBNB, "pool()": POOL}
+        self.post_deploy_states = {
+            block: {"code": "0x6000", "views": dict(valid)}
+            for block in (self.receipt_block, self.moving_head, "latest")
+        }
+
+        def send(target, payload):
+            self.sent.append((target, payload))
+            return dict(self.receipt)
+
+        def signer(fixture):
+            self.assertEqual(fixture, "deliberate non-key fixture")
+            self.signer_calls += 1
+            return types.SimpleNamespace(address="0x000000000000000000000000000000000000f00d", send=send)
+
+        def rpc(method, params):
+            if not self.sent:
+                return self.rpc(method, params)
+            self.rpc_calls.append((method, params))
+            if method == "eth_blockNumber":
+                return self.moving_head
+            self.post_deploy_reads.append((method, params))
+            if method not in ("eth_getCode", "eth_call"):
+                raise AssertionError(f"unexpected post-deploy RPC {method}")
+            target = params[0] if method == "eth_getCode" else params[0]["to"]
+            self.assertEqual(target.lower(), self.adapter_address, "post-deploy target tripwire")
+            state = self.post_deploy_states.get(params[1], {"code": "0x", "views": {}})
+            if method == "eth_getCode":
+                return state["code"]
+            selector = params[0]["data"]
+            for signature, value in state["views"].items():
+                if selector == "0x" + keccak(text=signature)[:4].hex():
+                    return "0x" + int(value, 16).to_bytes(32, "big").hex()
+            raise AssertionError(f"unexpected post-deploy view {params}")
+
+        setattr(self.chain, "Signer", signer)
+        setattr(self.chain, "rpc", rpc)
+
+    def test_post_deploy_code_and_all_bindings_use_receipt_block(self):
+        self.install_post_deploy_fixture()
+        self.execute("__main__", "--deploy")
+        self.assertEqual(self.signer_calls, 1)
+        self.assertEqual(len(self.sent), 1)
+        self.assertTrue(self.output.is_file())
+        expected = [("eth_getCode", [self.adapter_address, self.receipt_block])]
+        expected += [("eth_call", [{"to": self.adapter_address, "data": "0x" + keccak(text=signature)[:4].hex()}, self.receipt_block])
+                     for signature in ("token()", "wbnb()", "pool()")]
+        actual = []
+        for method, params in self.post_deploy_reads:
+            target = params[0] if method == "eth_getCode" else params[0]["to"]
+            normalized = [target.lower(), params[1]] if method == "eth_getCode" else [{**params[0], "to": target.lower()}, params[1]]
+            actual.append((method, normalized))
+        self.assertEqual(actual, expected, "receipt-block tripwire: never verify against the moving head or preflight block")
+        import json
+        out = json.loads(self.output.read_text())
+        self.assertEqual(out["adapter"].lower(), self.adapter_address)
+        self.assertEqual(out["preflightBlock"], "0x100")
+
+    def test_receipt_binding_stays_valid_when_moving_head_is_invalid(self):
+        self.install_post_deploy_fixture()
+        for block in (self.moving_head, "latest"):
+            self.post_deploy_states[block] = {"code": "0x", "views": {}}
+        self.execute("__main__", "--deploy")
+        self.assertTrue(self.output.is_file(), "receipt-block validity must not depend on a later head")
+        self.assertEqual({params[1] for _, params in self.post_deploy_reads}, {self.receipt_block})
+
+    def test_missing_adapter_code_at_receipt_block_is_not_success(self):
+        self.install_post_deploy_fixture()
+        self.post_deploy_states[self.receipt_block]["code"] = "0x"
+        with self.assertRaisesRegex(RuntimeError, "missing contract code"):
+            self.execute("__main__", "--deploy")
+        self.assertFalse(self.output.exists(), "missing receipt-block code must not write a success file")
+        self.assertEqual(len(self.post_deploy_reads), 1)
+        method, params = self.post_deploy_reads[0]
+        self.assertEqual((method, params[0].lower(), params[1]), ("eth_getCode", self.adapter_address, self.receipt_block))
+
+    def test_receipt_block_binding_mismatch_is_not_success(self):
+        for signature, key in (("token()", "token"), ("wbnb()", "wbnb"), ("pool()", "pool")):
+            with self.subTest(binding=key):
+                self.install_post_deploy_fixture()
+                self.post_deploy_states[self.receipt_block]["views"][signature] = "0x0000000000000000000000000000000000000bad"
+                try:
+                    self.execute("__main__", "--deploy")
+                except RuntimeError as exc:
+                    self.assertIn("adapter binding mismatch: " + key, str(exc).lower())
+                else:
+                    self.fail("receipt-block binding mismatch was reported as success")
+                self.assertFalse(self.output.exists(), "no success file may survive an invalid binding")
+                self.assertEqual({params[1] for _, params in self.post_deploy_reads}, {self.receipt_block})
+                self.assertNotIn(self.moving_head, {params[1] for _, params in self.post_deploy_reads})
+
+    def test_missing_receipt_block_number_is_not_success(self):
+        self.install_post_deploy_fixture()
+        del self.receipt["blockNumber"]
+        try:
+            self.execute("__main__", "--deploy")
+        except RuntimeError as exc:
+            self.assertIn("no block number", str(exc).lower())
+        else:
+            self.fail("receipt without blockNumber was accepted")
+        self.assertFalse(self.output.exists(), "unverifiable deployment must not write a success file")
+        self.assertEqual(self.post_deploy_reads, [], "unpinned head must never be used as a fallback")
+
     def test_token_equal_to_wbnb_rejected(self):
         self.env["TOKEN"] = WBNB
         self.views[WBNB, "pool()"] = self.views[TOKEN, "pool()"]
@@ -207,7 +324,7 @@ class AdapterPreflightTests(unittest.TestCase):
         adapter = "0x000000000000000000000000000000000000ada1"
         fake = types.SimpleNamespace(
             address="0x000000000000000000000000000000000000f00d",
-            send=lambda target, payload: {"contractAddress": adapter, "transactionHash": "0xfixture"},
+            send=lambda target, payload: {"contractAddress": adapter, "transactionHash": "0xfixture", "blockNumber": "0x101"},
         )
         setattr(self.chain, "Signer", lambda _fixture: fake)
         self.code[adapter] = "0x6000"
