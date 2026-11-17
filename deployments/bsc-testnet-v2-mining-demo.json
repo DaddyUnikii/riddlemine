@@ -1,0 +1,70 @@
+{
+  "chainId": 97,
+  "network": "BSC testnet",
+  "deployment": "v2-20261117T0952Z",
+  "addresses": {
+    "mining": "0xE955BB6c37Ab4b50794A664787D4adc2d1a89091",
+    "token": "0xa68e47A564ad58a79c2FF34fADcf978f9B241173",
+    "pool": "0x05F0089C22f9316d135eBDB9269A1Ceef39ecdaD"
+  },
+  "miner": {
+    "address": "0xA3788A0Ec8827D4322a52cE897FB2E4Bf86a649B",
+    "role": "bidder-1"
+  },
+  "steps": {
+    "funding": {
+      "from": "0xa415cB9b6713ad468C40C1c0A22250691e30B73e",
+      "tx": "0xbf1e88546e34a16525262a98f3928ae327b42e153900e9ee4c01ed3b02d8ee35",
+      "valueWei": 200000000000000
+    },
+    "buy": {
+      "gasUsed": 246689,
+      "tx": "0x1e00e7e773c7c35468d3ddfa454a582ce4a57e5e577c8ee3b9e6ff136a051207",
+      "valueWei": 5000000000000
+    },
+    "stake": {
+      "amount": 2500.0,
+      "gasUsed": 110166,
+      "tx": "0x7e8c1a7050a6238d5bdaba03602f62c5650e96122cfba2112bb481496f07463c"
+    },
+    "voucher": {
+      "day": 0,
+      "gasUsed": 52965,
+      "tx": "0x8d0d23a1772d28b7d91b169e7e58f0550cd172697a8604f954a431267cca2e50"
+    }
+  },
+  "wins": [
+    {
+      "gasUsed": 234673,
+      "mask": "0x19b3f69f",
+      "round": 124,
+      "tx": "0x0d75b91314571fccf7423554e448363634edbee40054ae7e6d6be508b54e685d"
+    },
+    {
+      "gasUsed": 154364,
+      "mask": "0x55ebb9",
+      "round": 125,
+      "tx": "0xd94f47080fc0dd59225168b7e143aa634480d60c8fd00c0c44bbca5331e4f2d5"
+    },
+    {
+      "gasUsed": 137931,
+      "mask": "0x4af77fd",
+      "round": 126,
+      "tx": "0x437b33766206681af19383565d2c678f28cd2a6ed12b8fa1caf5fcd25e31f8ca"
+    }
+  ],
+  "result": {
+    "totalMinedRdl": 468.03652968036533,
+    "vestingRdl": 468.02605671053857,
+    "claimableRdl": 0.010472969826673968,
+    "roundRewardRdl": 780.0608828006089,
+    "stakeOfRdl": 2500.0,
+    "requiredStakeRdl": 2500.0
+  },
+  "notes": [
+    "One IEO bidder bought RDL from the launched 0.25% v3 pool, paying the 5% launch tax.",
+    "Staked the 2500 RDL gate, redeemed a bot-signed tweet voucher for the 2x boost (20000 bps).",
+    "Solved and submitted rounds 124, 125 and 126; every transaction receipt has status 1.",
+    "Rewards vest over 30 days, so vesting() holds the balance and claimable() grows with time."
+  ]
+}

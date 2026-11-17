@@ -50,6 +50,7 @@
     "SwapAdapter": "dcb1d39c556d07efc9ace9d1caf59274ad238281440926e38b42a8a621908879"
   },
   "codeEvidence": "bsc-testnet-v2-code-evidence.json",
+  "miningDemo": "bsc-testnet-v2-mining-demo.json",
   "notes": [
     "Supersedes the v1 BSC testnet deployment in bsc-testnet.json, which is preserved unchanged.",
     "Deployed from the reviewed commit after PR #12 merged; deployer key never persisted or logged.",
