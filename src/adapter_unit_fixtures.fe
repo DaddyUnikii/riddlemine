@@ -1,0 +1,274 @@
+// Deterministic unit-only pool. This is NOT PancakeSwap integration.
+use std::abi::{Bytes, Uint160, Uint24, bytes_from_words_prefix}
+use core::num::IntDowncast
+use std::evm::StorageMap
+use ingot::Erc20
+use ingot::swap_adapter::AdapterSwap
+
+pub msg UnitPool {
+    #[selector = sol("configure(address,address,uint256,uint256)")]
+    Configure { token: Address, wbnb: Address, mode: u256, fill: u256 },
+    #[selector = sol("token0()")]
+    Token0 -> Address,
+    #[selector = sol("token1()")]
+    Token1 -> Address,
+    #[selector = sol("fee()")]
+    Fee -> Uint24,
+    #[selector = sol("factory()")]
+    Factory -> Address,
+    #[selector = sol("swap(address,bool,int256,uint160,bytes)")]
+    Swap {
+        recipient: Address,
+        zero_for_one: bool,
+        specified: i256,
+        limit: Uint160,
+        data: Bytes,
+    } -> (i256, i256),
+}
+
+pub msg UnitCallback {
+    #[selector = sol("pancakeV3SwapCallback(int256,int256,bytes)")]
+    Callback { delta0: i256, delta1: i256, data: Bytes },
+}
+
+struct PoolState { token: Address, wbnb: Address, mode: u256, fill: u256 }
+
+pub contract UnitAdapterPool uses (ctx: Ctx, call: mut Call) {
+    mut state: PoolState,
+    recv UnitPool {
+        Configure { token, wbnb, mode, fill } uses (mut state) {
+            state.token = token
+            state.wbnb = wbnb
+            state.mode = mode
+            state.fill = fill
+        }
+        Token0 -> Address uses state {
+            if state.token < state.wbnb {
+                state.token
+            } else {
+                state.wbnb
+            }
+        }
+        Token1 -> Address uses state {
+            if state.token < state.wbnb {
+                state.wbnb
+            } else {
+                state.token
+            }
+        }
+        Fee -> Uint24 {
+            Uint24 { val: 2500 }
+        }
+        Factory -> Address {
+            Address::new(0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865)
+        }
+        Swap { recipient, zero_for_one, specified, limit, data } -> (i256, i256)
+        uses (ctx, mut call, state)
+        {
+            let desired: u256 = if specified > 0 {
+                specified.downcast_unchecked()
+            } else {
+                (-specified).downcast_unchecked()
+            }
+            let amount = if state.fill > 0 && state.fill < desired {
+                state.fill
+            } else {
+                desired
+            }
+            let t0 = if state.token < state.wbnb {
+                state.token
+            } else {
+                state.wbnb
+            }
+            let t1 = if state.token < state.wbnb {
+                state.wbnb
+            } else {
+                state.token
+            }
+            let output = if zero_for_one { t1 } else { t0 }
+            let ok: bool = call
+                .call(
+                    addr: output,
+                    gas: 1000000,
+                    value: Wei::zero(),
+                    message: Erc20::Transfer { to: recipient, amount },
+                )
+            assert!(ok)
+            let signed: i256 = amount.downcast_unchecked()
+            let (d0, d1) = if zero_for_one {
+                (signed, -signed)
+            } else {
+                (-signed, signed)
+            }
+            let (c0, c1) = if state.mode == 1 {
+                (-d0, -d1)
+            } else if state.mode == 2 {
+                if zero_for_one {
+                    (d0 + 1, d1)
+                } else {
+                    (d0, d1 + 1)
+                }
+            } else if state.mode == 3 {
+                if zero_for_one {
+                    (d0, -((1 as i256) << 254) * 2)
+                } else {
+                    (-((1 as i256) << 254) * 2, d1)
+                }
+            } else {
+                (d0, d1)
+            }
+            if state.mode != 6 {
+                let callback_data = if state.mode == 4 {
+                    bytes_from_words_prefix<1, 1>([1])
+                } else {
+                    Bytes::empty()
+                }
+                call.call(
+                    addr: ctx.caller(),
+                    gas: 4000000,
+                    value: Wei::zero(),
+                    message: UnitCallback::Callback { delta0: c0, delta1: c1, data: callback_data },
+                )
+            }
+            if state.mode == 5 {
+                call.call(
+                    addr: ctx.caller(),
+                    gas: 4000000,
+                    value: Wei::zero(),
+                    message: UnitCallback::Callback {
+                        delta0: d0,
+                        delta1: d1,
+                        data: Bytes::empty(),
+                    },
+                )
+            }
+            if state.mode == 7 {
+                (d0 + 1, d1)
+            } else {
+                (d0, d1)
+            }
+        }
+    }
+}
+
+pub msg UnitFactory {
+    #[selector = sol("configure(address)")]
+    Configure { pool: Address },
+    #[selector = sol("getPool(address,address,uint24)")]
+    GetPool { token0: Address, token1: Address, fee: Uint24 } -> Address,
+}
+
+pub contract UnitAdapterFactory {
+    mut state: Address,
+    recv UnitFactory {
+        Configure { pool } uses (mut state) {
+            state = pool
+        }
+        GetPool { token0, token1, fee } -> Address
+        uses state
+        {
+            state
+        }
+    }
+}
+
+pub msg UnitMint {
+    #[selector = sol("mint(address,uint256)")]
+    Mint { to: Address, amount: u256 },
+    #[selector = sol("reentry(address)")]
+    Reentry { adapter: Address },
+    #[selector = sol("reentryAttempts()")]
+    ReentryAttempts -> u256,
+    #[selector = sol("reentrySucceeded()")]
+    ReentrySucceeded -> bool,
+}
+
+struct ReentryState { adapter: Address, attempts: u256, succeeded: bool }
+
+struct UnitLedger {
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
+}
+
+pub contract UnitAdapterWbnb uses (ctx: Ctx, call: mut Call) {
+    mut ledger: UnitLedger,
+    mut reentry: ReentryState,
+    recv UnitMint {
+        Mint { to, amount } uses (mut ledger) {
+            ledger.balances.set(key: to, value: ledger.balances.get(key: to) + amount)
+        }
+        Reentry { adapter } uses (ctx, mut ledger, mut reentry) {
+            reentry.adapter = adapter
+            reentry.attempts = 0
+            reentry.succeeded = false
+            ledger.balances.set(key: ctx.address(), value: 1000)
+            ledger.allowances.set(key: (ctx.address(), adapter), value: 1000)
+        }
+        ReentryAttempts -> u256 uses reentry {
+            reentry.attempts
+        }
+        ReentrySucceeded -> bool uses reentry {
+            reentry.succeeded
+        }
+    }
+    recv Erc20 {
+        Name -> String<10> {
+            "Unit WBNB"
+        }
+        Symbol -> String<3> {
+            "WBN"
+        }
+        Decimals -> u8 {
+            18
+        }
+        TotalSupply -> u256 {
+            0
+        }
+        BalanceOf { account } -> u256 uses ledger {
+            ledger.balances.get(key: account)
+        }
+        Allowance { owner, spender } -> u256 uses ledger {
+            ledger.allowances.get(key: (owner, spender))
+        }
+        Approve { spender, amount } -> bool uses (ctx, mut ledger) {
+            ledger.allowances.set(key: (ctx.caller(), spender), value: amount)
+            true
+        }
+        Transfer { to, amount } -> bool uses (ctx, mut ledger) {
+            let from = ctx.caller()
+            let balance = ledger.balances.get(key: from)
+            assert!(balance >= amount)
+            ledger.balances.set(key: from, value: balance - amount)
+            ledger.balances.set(key: to, value: ledger.balances.get(key: to) + amount)
+            true
+        }
+        TransferFrom { from, to, amount } -> bool
+        uses (ctx, mut call, mut ledger, mut reentry)
+        {
+            if reentry.adapter != Address::zero() && from != ctx.address() {
+                reentry.attempts = reentry.attempts + 1
+                let outcome = call
+                    .try_call(
+                        addr: reentry.adapter,
+                        gas: 4000000,
+                        value: Wei::zero(),
+                        message: AdapterSwap::BuyExactInput {
+                            gross_budget: 1,
+                            minimum_out: 0,
+                            deadline: ctx.timestamp().as_seconds() + 100,
+                            sqrt_price_limit: Uint160 { val: 0 },
+                        },
+                    )
+                reentry.succeeded = outcome.success()
+            }
+            let allowance = ledger.allowances.get(key: (from, ctx.caller()))
+            assert!(allowance >= amount)
+            let balance = ledger.balances.get(key: from)
+            assert!(balance >= amount)
+            ledger.allowances.set(key: (from, ctx.caller()), value: allowance - amount)
+            ledger.balances.set(key: from, value: balance - amount)
+            ledger.balances.set(key: to, value: ledger.balances.get(key: to) + amount)
+            true
+        }
+    }
+}

@@ -1,0 +1,399 @@
+// Constructor regressions use a child deployer so rejection is asserted,
+// rather than accepting an unrelated test-runner revert.
+use ingot::ieo::{
+    Ieo,
+    IeoMsg,
+    MODE_BID,
+    MODE_SLOT,
+    MIN_BID,
+    MAX_BID,
+    SLOT_START,
+    SLOTS,
+    IEO_TOKENS,
+    TARGET,
+    RATE,
+    STATE_SUCCESS,
+    STATE_SETTLING,
+    slot_cost,
+}
+use std::evm::wei
+
+pub msg ConfigDeployMsg {
+    #[selector = sol("deploySale(uint8,uint256)")]
+    Deploy { mode: u8, scale: u256 } -> Address,
+}
+
+pub contract ConfigDeployer uses (evm: mut Evm) {
+    recv ConfigDeployMsg {
+        Deploy { mode, scale } -> Address uses (mut evm) {
+            evm.create<Ieo>(
+                value: Wei::zero(),
+                args: (
+                    mode,
+                    Duration::zero(),
+                    Address::new(0xd),
+                    Address::new(0x313),
+                    Duration::zero(),
+                    scale,
+                ),
+            )
+        }
+    }
+}
+
+#[test]
+fn slot_scale_that_makes_first_purchase_free_is_rejected() uses (evm: mut Evm) {
+    let deployer = evm.create<ConfigDeployer>(value: Wei::zero(), args: ())
+    let invalid = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: MODE_SLOT, scale: SLOT_START + 1 },
+        )
+    assert!(
+        !invalid.success(),
+        "zero-price slot scale must be rejected",
+    )
+}
+
+#[test]
+fn bid_scale_that_rounds_advertised_minimum_to_zero_is_rejected()
+uses (evm: mut Evm)
+{
+    let deployer = evm.create<ConfigDeployer>(value: Wei::zero(), args: ())
+    let invalid = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: MODE_BID, scale: MIN_BID + 1 },
+        )
+    assert!(
+        !invalid.success(),
+        "zero-minimum bid scale must be rejected",
+    )
+}
+
+#[test]
+fn ieo_config_invalid_modes_zero_scales_and_extreme_scales_are_rejected()
+uses (evm: mut Evm)
+{
+    let deployer = evm.create<ConfigDeployer>(value: Wei::zero(), args: ())
+    let bad_mode = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: 2, scale: 1 },
+        )
+    assert!(!bad_mode.success())
+    let bid_zero = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: MODE_BID, scale: 0 },
+        )
+    let slot_zero = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: MODE_SLOT, scale: 0 },
+        )
+    assert!(!bid_zero.success() && !slot_zero.success())
+    let max_word: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    let bid_extreme = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: MODE_BID, scale: max_word },
+        )
+    let slot_extreme = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: MODE_SLOT, scale: max_word },
+        )
+    let zero_cap = evm
+        .try_call(
+            addr: deployer,
+            gas: 6_000_000,
+            value: Wei::zero(),
+            message: ConfigDeployMsg::Deploy { mode: MODE_BID, scale: MAX_BID + 1 },
+        )
+    assert!(
+        !bid_extreme.success() && !slot_extreme.success() && !zero_cap.success(),
+    )
+}
+
+fn configured_sale(_ mode: u8, _ scale: u256) -> Address uses (evm: mut Evm) {
+    evm.create<Ieo>(
+        value: Wei::zero(),
+        args: (
+            mode,
+            Duration::zero(),
+            Address::new(0xd),
+            Address::new(0x313),
+            Duration::zero(),
+            scale,
+        ),
+    )
+}
+
+fn assert_real_bid_bounds(_ scale: u256) uses (evm: mut Evm) {
+    let ieo = configured_sale(MODE_BID, scale)
+    let minimum = MIN_BID / scale
+    let cap = MAX_BID / scale
+    assert!(minimum > 0 && cap >= minimum)
+    let below = evm
+        .try_call(
+            addr: ieo,
+            gas: 300_000,
+            value: wei(minimum - 1),
+            message: IeoMsg::Bid {},
+        )
+    assert!(!below.success())
+    let _: u256 = evm.call(
+            addr: ieo,
+            gas: 300_000,
+            value: wei(minimum),
+            message: IeoMsg::Bid {},
+        )
+    let _: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 300_000,
+            value: wei(cap - minimum),
+            message: IeoMsg::Bid {},
+        )
+    let above = evm.try_call(
+            addr: ieo,
+            gas: 300_000,
+            value: wei(1),
+            message: IeoMsg::Bid {},
+        )
+    let zero = evm.try_call(
+            addr: ieo,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: IeoMsg::Bid {},
+        )
+    assert!(!above.success() && !zero.success())
+    let n: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Participants {},
+        )
+    let contribution: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Contributed { who: evm.address() },
+        )
+    assert!(
+        n == 1 && contribution == cap && evm.balance(ieo) == wei(cap),
+    )
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn ieo_config_main_demo_and_maximum_bid_scale_accept_real_value_unique_topups()
+uses (evm: mut Evm)
+{
+    assert_real_bid_bounds(1)
+    assert_real_bid_bounds(10_000)
+    assert_real_bid_bounds(MIN_BID)
+}
+
+fn assert_positive_slot_lifecycle(_ scale: u256) uses (evm: mut Evm) {
+    let ieo = configured_sale(MODE_SLOT, scale)
+    let first = slot_cost(sold: 0, count: 1, scale)
+    assert!(first > 0)
+    let free = evm
+        .try_call(
+            addr: ieo,
+            gas: 300_000,
+            value: Wei::zero(),
+            message: IeoMsg::BuySlots { count: 1 },
+        )
+    assert!(!free.success())
+    let _: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 300_000,
+            value: wei(first),
+            message: IeoMsg::BuySlots { count: 1 },
+        )
+    let rest = slot_cost(sold: 1, count: SLOTS - 1, scale)
+    let _: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 300_000,
+            value: wei(rest),
+            message: IeoMsg::BuySlots { count: SLOTS - 1 },
+        )
+    let n: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Participants {},
+        )
+    assert!(n == 1, "positive slot topup inserted the buyer twice")
+    let state: u8 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Finalize {},
+        )
+    assert!(state == STATE_SETTLING)
+    let done: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 1_000_000,
+            value: Wei::zero(),
+            message: IeoMsg::Settle { max: 2 },
+        )
+    let sold: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::SoldTokens {},
+        )
+    let raised: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Raised {},
+        )
+    assert!(done == 1 && sold == IEO_TOKENS && raised == first + rest)
+    assert!(evm.balance(ieo) == wei(raised))
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn ieo_config_main_demo_and_maximum_slot_scale_keep_positive_unique_settlement()
+uses (evm: mut Evm)
+{
+    assert_positive_slot_lifecycle(1)
+    assert_positive_slot_lifecycle(10_000)
+    assert_positive_slot_lifecycle(SLOT_START)
+}
+
+pub msg ScaleBuyerMsg {
+    #[selector = sol("bidForSale(address,uint256)")]
+    Bid { ieo: Address, amount: u256 } -> u256,
+}
+
+pub contract ScaleBuyer uses (call: mut Call) {
+    #[payable]
+    init()
+    {}
+    recv ScaleBuyerMsg {
+        Bid { ieo, amount } -> u256 uses (mut call) {
+            call.call(
+                addr: ieo,
+                gas: 300_000,
+                value: wei(amount),
+                message: IeoMsg::Bid {},
+            )
+        }
+    }
+}
+
+fn assert_actual_root_settlement(_ scale: u256) uses (evm: mut Evm) {
+    let ieo = configured_sale(MODE_BID, scale)
+    let cap = MAX_BID / scale
+    var i: u256 = 0
+    var first = Address::zero()
+    while i < 201 {
+        let buyer = evm.create<ScaleBuyer>(value: wei(cap), args: ())
+        if i == 0 { first = buyer }
+        let _: u256 = evm
+            .call(
+                addr: buyer,
+                gas: 500_000,
+                value: Wei::zero(),
+                message: ScaleBuyerMsg::Bid { ieo, amount: cap },
+            )
+        i += 1
+    }
+    let state: u8 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Finalize {},
+        )
+    assert!(state == STATE_SETTLING)
+    let done: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 40_000_000,
+            value: Wei::zero(),
+            message: IeoMsg::Settle { max: 201 },
+        )
+    let sold: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::SoldTokens {},
+        )
+    let raised: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Raised {},
+        )
+    let paid: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::Paid { who: first },
+        )
+    let refund: u256 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::PendingRefund { who: first },
+        )
+    let allocation = IEO_TOKENS / 201
+    let rate = RATE * scale
+    assert!(
+        done == 201 && sold == allocation * 201 && sold <= IEO_TOKENS,
+    )
+    assert!(
+        paid == (allocation + rate - 1) / rate && paid + refund == cap,
+    )
+    // Each ceil-payment adds less than one wei; do not rewrite sale economics.
+    assert!(raised >= TARGET / scale && raised < TARGET / scale + 201)
+    let final_state: u8 = evm
+        .call(
+            addr: ieo,
+            gas: 100_000,
+            value: Wei::zero(),
+            message: IeoMsg::State {},
+        )
+    assert!(final_state == STATE_SUCCESS)
+}
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn ieo_config_bid_roots_are_maintained_by_real_payments_across_supported_scales()
+uses (evm: mut Evm)
+{
+    assert_actual_root_settlement(1)
+    assert_actual_root_settlement(10_000)
+    assert_actual_root_settlement(MIN_BID)
+}

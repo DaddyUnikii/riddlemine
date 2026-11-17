@@ -684,3 +684,42 @@ fn scaled_sale_fills_half_on_faucet_bnb() uses (evm: mut Evm) {
         )
     assert!(cost == 550_000_000_000)
 }
+
+#[test(balance = 1_000_000_000_000_000_000_000_000)]
+fn early_exit_before_launch_is_rejected_without_breaking_launch()
+uses (evm: mut Evm)
+{
+    let (ieo, token, locker, d, first) = settled_sale(SECOND * (10 * DAY))
+    let _: bool = evm
+        .call(
+            addr: d,
+            gas: 400000,
+            value: Wei::zero(),
+            message: DevMsg::DoBind { ieo, token, locker },
+        )
+    let before = tokens_of(token, ieo)
+    let exit = evm
+        .try_call(
+            addr: first,
+            gas: 500000,
+            value: Wei::zero(),
+            message: BuyerMsg::DoExit { ieo },
+        )
+    assert!(!exit.success(), "pre-launch exit must revert")
+    assert!(tokens_of(token, ieo) == before, "launch reserve changed")
+    assert!(tokens_of(token, first) == 0)
+    let _: u256 = evm.call(
+            addr: ieo,
+            gas: 3000000,
+            value: Wei::zero(),
+            message: IeoMsg::Launch {},
+        )
+    let launched: bool = evm
+        .call(
+            addr: ieo,
+            gas: 100000,
+            value: Wei::zero(),
+            message: IeoMsg::Launched {},
+        )
+    assert!(launched)
+}

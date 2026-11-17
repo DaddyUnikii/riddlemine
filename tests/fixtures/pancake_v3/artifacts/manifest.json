@@ -1,0 +1,127 @@
+{
+  "anvil": {
+    "binary_sha256": "cc6b5239d4c0cacc6a5086619eee1e4a9ec6aa7a21bf1df631ebaa7816139d16",
+    "version_output": "anvil Version: 1.9.0\nCommit SHA: 6056c5845d34205a83cf7108042adb137325c9df\nBuild Timestamp: 2026-11-02T20:28:32.434285913Z (1793651312)\nBuild Profile: dist"
+  },
+  "dependency_fixture_policy": "Unmodified constructor-deployed source runtimes relocated to fixture addresses with exact constructor-written dependency storage. The pool is real CREATE2 deployment, never relocated. No RDL/WETH balances or pool storage patched.",
+  "fe": {
+    "build_command": [
+      "fe",
+      "build",
+      "sources/rdl-current",
+      "--contract",
+      "Riddle",
+      "--out-dir",
+      "artifacts",
+      "--emit",
+      "bytecode,runtime-bytecode,abi,metadata"
+    ],
+    "download_url": "https://github.com/argotorg/fe/releases/download/v26.5.0/fe_linux_amd64",
+    "linux_amd64_sha256": "3732fbe8a6e9d2ea3925d02d0e3a1478bc1e01d742c2be75d3ea7300c46c45f0",
+    "source_revision": "3dab95f8eebdccf9a2382bb59a33f7bbd03540ca",
+    "version": "26.5.0"
+  },
+  "files": {
+    "README.md": {
+      "bytes": 3352,
+      "sha256": "9cb8a877dcb4774d3d912f6bfd40cb3537a35fefa83c6a75f558bf3e1741a40a"
+    },
+    "artifacts/NonfungiblePositionManager.bin": {
+      "bytes": 50891,
+      "sha256": "9fb7228fb8ee2a1c689e7969e6b2c6101d3eeba4299aedd89a711860ea3aa19e"
+    },
+    "artifacts/NonfungiblePositionManager.input.json": {
+      "bytes": 186969,
+      "sha256": "72096c99531ed1a915ec72207ce9fc6f80602a72b40006afa896bc62117a349c"
+    },
+    "artifacts/PancakeV3Factory.bin": {
+      "bytes": 12523,
+      "sha256": "9a1e22b1e1e7de9ce0e7eebb5e91ea51a8f883ba72b670c5e833adcb0f87024f"
+    },
+    "artifacts/PancakeV3Factory.input.json": {
+      "bytes": 40947,
+      "sha256": "3e633274d34a4e1e11c620271c83eafe61ab4d7f9143fc1cf1f0135018399103"
+    },
+    "artifacts/PancakeV3Pool.bin": {
+      "bytes": 47133,
+      "sha256": "04623292396d42116fbb7d9440180aca3340204112c43eb47583fcf3129b0a01"
+    },
+    "artifacts/PancakeV3PoolDeployer.bin": {
+      "bytes": 49177,
+      "sha256": "a999a508d58db90d99405c19ebc2c10574836aed3aa852d7087899bb1a441d9b"
+    },
+    "artifacts/PancakeV3PoolDeployer.input.json": {
+      "bytes": 155107,
+      "sha256": "f4bcd9ac02b14b3ba1ca9eb7f444c06094f35c4a39bd5bb120f11bc51a637089"
+    },
+    "artifacts/Riddle.bin": {
+      "bytes": 3422,
+      "sha256": "96a673b7c47f3c5ff314beb46f52c5edda86cb728b5845683f3d985a3e5f0464"
+    },
+    "artifacts/Riddle.runtime.bin": {
+      "bytes": 2260,
+      "sha256": "c190b2a9cd7e1f6b85c06a40a747ca8be896e14bcaa3ba3a6b29438a119585a8"
+    },
+    "artifacts/SwapRouter.bin": {
+      "bytes": 24917,
+      "sha256": "35b2d653decb83779b916377dab62674c6394e825f56fbe464bc55ba7c1170b6"
+    },
+    "artifacts/SwapRouter.input.json": {
+      "bytes": 90549,
+      "sha256": "7a525ba66afa44afa7989a946d1e24a9f732dcfc8f263c743b8f4a09906033b1"
+    },
+    "artifacts/WETH9.bin": {
+      "bytes": 7009,
+      "sha256": "df79ab38a32d6d3af11ad4821b4cdaa924c9120cac06650461cacf86e654f14f"
+    },
+    "artifacts/solidity-provenance.json": {
+      "bytes": 35801,
+      "sha256": "30543a1f68a853a1f63cf3191be9b5ab6880baff3403e21fbf9d375c23a44f83"
+    },
+    "build_pancake.cjs": {
+      "bytes": 4733,
+      "sha256": "6f2077d566675a0211d4ca9de8dd7872ffe6bbb80a3b9ac6f86a905cb094a3a5"
+    },
+    "lifecycle.py": {
+      "bytes": 19185,
+      "sha256": "09f1504a3396d51af10b82b14a698aed664b94769df8406fb5e052fe8be234c3"
+    },
+    "rebuild.cjs": {
+      "bytes": 2232,
+      "sha256": "baab9af7848a6fde462c6d5d6e466203cbe7a718f95c86c19e3219225ce7d0da"
+    },
+    "run_local.py": {
+      "bytes": 31243,
+      "sha256": "965d49aa0e58ec0eba2e4d8c9d8f6f668b1c1fecf434762b2187b38c31e8293e"
+    },
+    "sources/pancake-v3/projects/v3-periphery/LICENSE": {
+      "bytes": 18091,
+      "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505"
+    },
+    "sources/rdl-current/src/lib.fe": {
+      "bytes": 7433,
+      "sha256": "4aea73440a381fe1fab29e5904b639ce02d6031dcbbfd231245126454bd14475"
+    },
+    "toolchain/package-lock.json": {
+      "bytes": 10822,
+      "sha256": "f8d3a4498a5baab2b249837eb3a98d2d1f9555368edf7cc08a977edf3769ee82"
+    },
+    "toolchain/package.json": {
+      "bytes": 97,
+      "sha256": "5234d0508a1758189beb5ebf866b42e9a7f53829e3f5682e52d97284f05d4c03"
+    }
+  },
+  "openzeppelin_revision": "04695aecbd4d17dddfd55de766d10e3805d6f42f",
+  "openzeppelin_tag": "v3.4.2-solc-0.7",
+  "packaging": "Measured subset of upstream exported source/artifact fingerprints; complete corresponding Solidity source lives in included standard-json input files; runner copied without modification.",
+  "pool_init_hash": "0x6ce8eb472fa82df5469c6ab6d485f17c3ad13c8cd7af59b3d4a8026c5ce0f7e2",
+  "pool_init_hash_exact_match": true,
+  "rdl_revision": "5e5719ee389318d06493870c42670a509692a2ea",
+  "schema_version": 1,
+  "solc_js_revision": "e524b8bda802714b343f2cb3da313ef9b7cc01a5",
+  "solc_soljson_sha256": "b94e69dfb056b3e26080f805ab43b668afbc0ac70bf124bfb7391ecfc0172ad2",
+  "solc_version": "0.7.6+commit.7338295f.Emscripten.clang",
+  "solidity_compiler_tag_revision": "7338295feebfb3f044e265d5cf05ef1841b258b1",
+  "solidity_revision": "986847948755cba528324d41be19480731c36c2a",
+  "upstream_full_manifest_sha256": "faad9c67d875f8d2e00021eefdc0440d715655c8838c1387d28afdbb1a816f39"
+}

@@ -1,0 +1,452 @@
+use core::num::{IntDowncast, mul_div}
+use std::abi::{Bytes, Uint160, Uint24}
+use ingot::{Erc20, TaxViews, pool_address}
+
+pub const MAX_SWAP_AMOUNT: u256 = 57896044618658097711785492504343953926634992332820282019728792003956564819967
+pub const PANCAKE_FACTORY: Address = Address::new(0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865)
+const MIN_SQRT_RATIO: u256 = 4295128739
+const MAX_SQRT_RATIO: u256 = 1461446703485210103287273052203988822378723970342
+
+/// Net credit under RDL's floor-rounded trade tax.
+pub fn net_from_gross(gross: u256, bps: u256) -> u256 {
+    assert!(bps < 10_000, "invalid tax rate")
+    gross - mul_div(gross, bps, 10_000)
+}
+
+/// Smallest gross transfer that credits exactly `net` after floor tax.
+pub fn gross_for_net(net: u256, bps: u256) -> u256 {
+    assert!(bps < 10_000, "invalid tax rate")
+    if net == 0 {
+        0
+    } else {
+        mul_div(net - 1, 10_000, 10_000 - bps) + 1
+    }
+}
+
+pub msg AdapterSwap {
+    #[selector = sol("sellExactInput(uint256,uint256,uint256,uint160)")]
+    SellExactInput {
+        gross_budget: u256,
+        minimum_out: u256,
+        deadline: u256,
+        sqrt_price_limit: Uint160,
+    } -> (u256, u256),
+    #[selector = sol("buyExactInput(uint256,uint256,uint256,uint160)")]
+    BuyExactInput {
+        gross_budget: u256,
+        minimum_out: u256,
+        deadline: u256,
+        sqrt_price_limit: Uint160,
+    } -> (u256, u256),
+    #[selector = sol("sellExactOutput(uint256,uint256,uint256,uint160)")]
+    SellExactOutput {
+        wanted: u256,
+        gross_maximum: u256,
+        deadline: u256,
+        sqrt_price_limit: Uint160,
+    } -> (u256, u256),
+    #[selector = sol("buyExactOutput(uint256,uint256,uint256,uint160)")]
+    BuyExactOutput {
+        wanted: u256,
+        gross_maximum: u256,
+        deadline: u256,
+        sqrt_price_limit: Uint160,
+    } -> (u256, u256),
+}
+
+pub msg AdapterCallback {
+    #[selector = sol("pancakeV3SwapCallback(int256,int256,bytes)")]
+    PancakeV3SwapCallback { amount0_delta: i256, amount1_delta: i256, data: Bytes },
+}
+
+pub msg AdapterPool {
+    #[selector = sol("token0()")]
+    Token0 -> Address,
+    #[selector = sol("token1()")]
+    Token1 -> Address,
+    #[selector = sol("fee()")]
+    Fee -> Uint24,
+    #[selector = sol("factory()")]
+    Factory -> Address,
+    #[selector = sol("swap(address,bool,int256,uint160,bytes)")]
+    Swap {
+        recipient: Address,
+        zero_for_one: bool,
+        amount_specified: i256,
+        sqrt_price_limit: Uint160,
+        data: Bytes,
+    } -> (i256, i256),
+}
+
+pub msg AdapterFactory {
+    #[selector = sol("getPool(address,address,uint24)")]
+    GetPool { token0: Address, token1: Address, fee: Uint24 } -> Address,
+}
+
+pub msg AdapterViews {
+    #[selector = sol("token()")]
+    Token -> Address,
+    #[selector = sol("wbnb()")]
+    Wbnb -> Address,
+    #[selector = sol("pool()")]
+    Pool -> Address,
+}
+
+struct Binding { token: Address, wbnb: Address, pool: Address }
+// phase 0=idle, 1=locked preparation, 2=awaiting callback, 3=paid.
+struct Operation {
+    phase: u256,
+    payer: Address,
+    sell: bool,
+    zero_for_one: bool,
+    gross_budget: u256,
+    net_budget: u256,
+    rate: u256,
+    spent: u256,
+    debt: u256,
+    gross_output: u256,
+}
+
+fn balance(_ token: Address, who: Address) -> u256 uses (call: Call) {
+    call.static(
+        addr: token,
+        gas: 100000,
+        message: Erc20::BalanceOf { account: who },
+    )
+}
+
+fn positive_and_negative(zero_for_one: bool, d0: i256, d1: i256) -> (u256, u256) {
+    let (debt, output) = if zero_for_one { (d0, d1) } else { (d1, d0) }
+    assert!(debt > 0 && output < 0, "invalid swap direction")
+    let max_signed: i256 = MAX_SWAP_AMOUNT.downcast_unchecked()
+    let min_signed: i256 = -max_signed - 1
+    assert!(output > min_signed, "invalid output magnitude")
+    (debt.downcast_unchecked(), (-output).downcast_unchecked())
+}
+
+fn trade(
+    _ sell: bool,
+    _ exact_output: bool,
+    gross_budget: u256,
+    minimum_out: u256,
+    deadline: u256,
+    sqrt_price_limit: Uint160,
+) -> (u256, u256)
+uses (ctx: Ctx, call: mut Call, binding: Binding, operation: mut Operation)
+{
+    assert!(operation.phase == 0, "operation active")
+    operation.phase = 1
+    assert!(
+        ctx.caller() != binding.pool && ctx.caller() != ctx.address(),
+        "invalid payer",
+    )
+    assert!(ctx.timestamp().as_seconds() <= deadline, "expired")
+    assert!(
+        gross_budget > 0 && gross_budget <= MAX_SWAP_AMOUNT,
+        "invalid budget",
+    )
+    assert!(
+        minimum_out <= MAX_SWAP_AMOUNT && (!exact_output || minimum_out > 0),
+        "invalid minimum",
+    )
+    let rate: u256 = call
+        .static(
+            addr: binding.token,
+            gas: 100000,
+            message: TaxViews::CurrentTaxBps {},
+        )
+    assert!(rate >= 100 && rate <= 500, "invalid RDL rate")
+    let payer = ctx.caller()
+    let input_token = if sell { binding.token } else { binding.wbnb }
+    let output_token = if sell { binding.wbnb } else { binding.token }
+    let distributor: Address = call
+        .static(
+            addr: binding.token,
+            gas: 100000,
+            message: TaxViews::Distributor {},
+        )
+    let input_before = balance(input_token, who: payer)
+    let output_before = balance(output_token, who: payer)
+    let zero_for_one = input_token < output_token
+    let limit = if sqrt_price_limit.val == 0 {
+        if zero_for_one {
+            MIN_SQRT_RATIO + 1
+        } else {
+            MAX_SQRT_RATIO - 1
+        }
+    } else {
+        sqrt_price_limit.val
+    }
+    assert!(
+        limit > MIN_SQRT_RATIO && limit < MAX_SQRT_RATIO,
+        "invalid price limit",
+    )
+    let net_budget = if sell {
+        net_from_gross(gross: gross_budget, bps: rate)
+    } else {
+        gross_budget
+    }
+    operation.payer = payer
+    operation.sell = sell
+    operation.zero_for_one = zero_for_one
+    operation.gross_budget = gross_budget
+    operation.net_budget = net_budget
+    operation.rate = rate
+    operation.spent = 0
+    operation.debt = 0
+    operation.gross_output = 0
+    operation.phase = 2
+    let magnitude = if exact_output {
+        if !sell && payer != distributor {
+            gross_for_net(net: minimum_out, bps: rate)
+        } else {
+            minimum_out
+        }
+    } else {
+        net_budget
+    }
+    assert!(
+        magnitude > 0 && magnitude <= MAX_SWAP_AMOUNT,
+        "invalid swap amount",
+    )
+    let signed: i256 = magnitude.downcast_unchecked()
+    let specified = if exact_output { -signed } else { signed }
+    let (d0, d1): (i256, i256) = call
+        .call(
+            addr: binding.pool,
+            gas: ctx.gas(),
+            value: Wei::zero(),
+            message: AdapterPool::Swap {
+                recipient: payer,
+                zero_for_one,
+                amount_specified: specified,
+                sqrt_price_limit: Uint160 { val: limit },
+                data: Bytes::empty(),
+            },
+        )
+    assert!(operation.phase == 3, "callback not paid")
+    let (debt, gross_output) = positive_and_negative(zero_for_one, d0, d1)
+    assert!(
+        debt == operation.debt && gross_output == operation.gross_output,
+        "callback mismatch",
+    )
+    assert!(
+        !exact_output || gross_output == magnitude,
+        "partial exact output",
+    )
+    let input_after = balance(input_token, who: payer)
+    let output_after = balance(output_token, who: payer)
+    // Distributor receives its own sell tax back. The returned spent value
+    // remains the gross transfer/allowance debit; wallet decrease is net debt.
+    let wallet_spent = if sell && payer == distributor {
+        operation.debt
+    } else {
+        operation.spent
+    }
+    assert!(
+        input_before >= input_after && input_before - input_after == wallet_spent,
+        "input accounting",
+    )
+    assert!(output_after >= output_before, "output accounting")
+    let received = output_after - output_before
+    let expected = if sell || payer == distributor {
+        gross_output
+    } else {
+        net_from_gross(gross: gross_output, bps: rate)
+    }
+    assert!(
+        received >= minimum_out && received == expected,
+        "minimum output",
+    )
+    let spent = operation.spent
+    operation.phase = 0
+    operation.payer = Address::zero()
+    operation.gross_budget = 0
+    operation.net_budget = 0
+    operation.rate = 0
+    operation.spent = 0
+    operation.debt = 0
+    operation.gross_output = 0
+    operation.zero_for_one = false
+    operation.sell = false
+    (spent, received)
+}
+
+/// Single immutable RDL/WBNB pool adapter. No owner, approvals, or custody.
+pub contract SwapAdapter uses (ctx: Ctx, call: mut Call) {
+    mut binding: Binding,
+    mut operation: Operation,
+    init(token: Address, wbnb: Address, pool: Address)
+    uses (ctx, call, mut binding)
+    {
+        assert!(
+            ctx.extcodesize(token) > 0 && ctx.extcodesize(wbnb) > 0 && ctx.extcodesize(pool) > 0,
+            "missing dependency code",
+        )
+        assert!(
+            token != wbnb && token != pool && wbnb != pool && pool == pool_address(token, wbnb),
+            "wrong pool",
+        )
+        assert!(
+            ctx.address() != token && ctx.address() != wbnb && ctx.address() != pool,
+            "invalid adapter address",
+        )
+        let bound: Address = call.static(addr: token, gas: 100000, message: TaxViews::Pool {})
+        assert!(bound == pool, "wrong token binding")
+        let npm: Address = call
+            .static(
+                addr: token,
+                gas: 100000,
+                message: TaxViews::PositionManager {},
+            )
+        let distributor: Address = call
+            .static(
+                addr: token,
+                gas: 100000,
+                message: TaxViews::Distributor {},
+            )
+        assert!(
+            npm != Address::zero() && npm != ctx.address() && npm != pool,
+            "invalid exemption binding",
+        )
+        assert!(
+            distributor != Address::zero() && distributor != ctx.address() && distributor != pool,
+            "invalid distributor binding",
+        )
+        let token0: Address = call.static(addr: pool, gas: 100000, message: AdapterPool::Token0 {})
+        let token1: Address = call.static(addr: pool, gas: 100000, message: AdapterPool::Token1 {})
+        let fee: Uint24 = call.static(addr: pool, gas: 100000, message: AdapterPool::Fee {})
+        let factory: Address = call
+            .static(addr: pool, gas: 100000, message: AdapterPool::Factory {})
+        assert!(
+            token0 == (if token < wbnb { token } else { wbnb })
+                && token1 == (if token < wbnb { wbnb } else { token }),
+            "wrong pool tokens",
+        )
+        assert!(
+            fee.val == 2500 && factory == PANCAKE_FACTORY && ctx.extcodesize(factory) > 0,
+            "wrong pool factory or fee",
+        )
+        let registered: Address = call
+            .static(
+                addr: factory,
+                gas: 100000,
+                message: AdapterFactory::GetPool { token0, token1, fee },
+            )
+        assert!(registered == pool, "unregistered pool")
+        binding.token = token
+        binding.wbnb = wbnb
+        binding.pool = pool
+    }
+    recv AdapterSwap {
+        SellExactInput { gross_budget, minimum_out, deadline, sqrt_price_limit } -> (u256, u256)
+        uses (ctx, mut call, binding, mut operation)
+        {
+            trade(
+                true,
+                false,
+                gross_budget,
+                minimum_out,
+                deadline,
+                sqrt_price_limit,
+            )
+        }
+        BuyExactInput { gross_budget, minimum_out, deadline, sqrt_price_limit } -> (u256, u256)
+        uses (ctx, mut call, binding, mut operation)
+        {
+            trade(
+                false,
+                false,
+                gross_budget,
+                minimum_out,
+                deadline,
+                sqrt_price_limit,
+            )
+        }
+        SellExactOutput { wanted, gross_maximum, deadline, sqrt_price_limit } -> (u256, u256)
+        uses (ctx, mut call, binding, mut operation)
+        {
+            trade(
+                true,
+                true,
+                gross_budget: gross_maximum,
+                minimum_out: wanted,
+                deadline,
+                sqrt_price_limit,
+            )
+        }
+        BuyExactOutput { wanted, gross_maximum, deadline, sqrt_price_limit } -> (u256, u256)
+        uses (ctx, mut call, binding, mut operation)
+        {
+            trade(
+                false,
+                true,
+                gross_budget: gross_maximum,
+                minimum_out: wanted,
+                deadline,
+                sqrt_price_limit,
+            )
+        }
+    }
+    recv AdapterViews {
+        Token -> Address uses binding {
+            binding.token
+        }
+        Wbnb -> Address uses binding {
+            binding.wbnb
+        }
+        Pool -> Address uses binding {
+            binding.pool
+        }
+    }
+    recv AdapterCallback {
+        PancakeV3SwapCallback { amount0_delta, amount1_delta, data }
+        uses (ctx, mut call, binding, mut operation)
+        {
+            assert!(
+                ctx.caller() == binding.pool && operation.phase == 2,
+                "unauthorized callback",
+            )
+            assert!(data.len() == 0, "invalid callback data")
+            let (debt, output) = positive_and_negative(
+                zero_for_one: operation.zero_for_one,
+                d0: amount0_delta,
+                d1: amount1_delta,
+            )
+            assert!(debt <= operation.net_budget, "callback over budget")
+            let gross = if operation.sell {
+                gross_for_net(net: debt, bps: operation.rate)
+            } else {
+                debt
+            }
+            assert!(gross <= operation.gross_budget, "gross over budget")
+            operation.phase = 3
+            operation.spent = gross
+            operation.debt = debt
+            operation.gross_output = output
+            let input_token = if operation.sell {
+                binding.token
+            } else {
+                binding.wbnb
+            }
+            let before = balance(input_token, who: binding.pool)
+            let ok: bool = call
+                .call(
+                    addr: input_token,
+                    gas: ctx.gas(),
+                    value: Wei::zero(),
+                    message: Erc20::TransferFrom {
+                        from: operation.payer,
+                        to: binding.pool,
+                        amount: gross,
+                    },
+                )
+            assert!(ok, "payment failed")
+            let after = balance(input_token, who: binding.pool)
+            assert!(
+                after >= before && after - before == debt,
+                "pool credit mismatch",
+            )
+        }
+    }
+}

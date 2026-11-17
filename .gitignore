@@ -1,3 +1,12 @@
 out/
 deployments/*.local.json
-scripts/__pycache__/
+__pycache__/
+.venv/
+.env
+.env.*
+secrets/
+*.key
+bidders*.json
+node_modules/
+.local-evidence/
+tests/fixtures/pancake_v3/evidence/

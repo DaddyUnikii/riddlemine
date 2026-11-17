@@ -257,6 +257,14 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
         assert!(mode == MODE_BID || mode == MODE_SLOT, "bad mode")
         assert!(scale > 0, "zero scale")
         assert!(
+            mode != MODE_SLOT || scale <= SLOT_START,
+            "slot scale too large",
+        )
+        assert!(
+            mode != MODE_BID || scale <= MIN_BID,
+            "bid scale too large",
+        )
+        assert!(
             dev != Address::zero() && mining != Address::zero(),
             "zero address",
         )
@@ -499,6 +507,7 @@ pub contract Ieo uses (ctx: Ctx, call: mut Call, log: mut Log) {
         /// Leave now: the unlocked part in full, half of the locked part, and
         /// the other half to the mining pool.
         ExitEarly -> u256 uses (ctx, mut call, mut book, mut log) {
+            assert!(book.launched, "not launched")
             let who = ctx.caller()
             let free = withdrawable(who)
             let locked = locked_stake(who)

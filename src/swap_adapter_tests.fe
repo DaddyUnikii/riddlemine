@@ -1,0 +1,75 @@
+// Security controls are unit fixtures, not real-Pancake integration claims.
+use ingot::swap_adapter::SwapAdapter
+use ingot::{Erc20, Riddle}
+
+pub msg DependencyRegression {
+    #[selector = sol("ok()")]
+    Ok -> bool,
+}
+
+pub contract DummyDependencyRegression {
+    recv DependencyRegression {
+        Ok -> bool {
+            true
+        }
+    }
+}
+
+pub msg DeployAdapterRegression {
+    #[selector = sol("deploy(address,address,address)")]
+    Deploy { token: Address, wbnb: Address, pool: Address } -> Address,
+}
+
+pub contract AdapterDeployerRegression uses (create: mut Create) {
+    recv DeployAdapterRegression {
+        Deploy { token, wbnb, pool } -> Address uses (mut create) {
+            create.create<SwapAdapter>(value: Wei::zero(), args: (token, wbnb, pool))
+        }
+    }
+}
+
+#[test]
+fn adapter_rejects_empty_dependency_code() uses (evm: mut Evm) {
+    let deployer = evm.create<AdapterDeployerRegression>(value: Wei::zero(), args: ())
+    let outcome = evm
+        .try_call(
+            addr: deployer,
+            gas: 3000000,
+            value: Wei::zero(),
+            message: DeployAdapterRegression::Deploy {
+                token: Address::new(0xabc),
+                wbnb: Address::new(0xb0b),
+                pool: Address::new(0x123),
+            },
+        )
+    assert!(
+        !outcome.success(),
+        "adapter accepted non-contract dependencies",
+    )
+}
+
+#[test]
+fn adapter_rejects_a_pool_not_bound_to_the_token() uses (evm: mut Evm) {
+    let wbnb = evm.create<DummyDependencyRegression>(value: Wei::zero(), args: ())
+    let pool = evm.create<DummyDependencyRegression>(value: Wei::zero(), args: ())
+    let token = evm
+        .create<Riddle>(
+            value: Wei::zero(),
+            args: (
+                evm.address(),
+                Address::new(0x313),
+                Address::new(0xd15),
+                wbnb,
+                Address::new(0x9a1),
+            ),
+        )
+    let deployer = evm.create<AdapterDeployerRegression>(value: Wei::zero(), args: ())
+    let outcome = evm
+        .try_call(
+            addr: deployer,
+            gas: 3000000,
+            value: Wei::zero(),
+            message: DeployAdapterRegression::Deploy { token, wbnb, pool },
+        )
+    assert!(!outcome.success(), "adapter accepted wrong pool")
+}

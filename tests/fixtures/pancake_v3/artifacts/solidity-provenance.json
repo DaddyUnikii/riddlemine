@@ -1,0 +1,578 @@
+{
+  "upstream": "https://github.com/pancakeswap/pancake-v3-contracts",
+  "revision": "986847948755cba528324d41be19480731c36c2a",
+  "compiler": "0.7.6+commit.7338295f.Emscripten.clang",
+  "compiler_soljson_sha256": "b94e69dfb056b3e26080f805ab43b668afbc0ac70bf124bfb7391ecfc0172ad2",
+  "jobs": [
+    {
+      "name": "PancakeV3PoolDeployer",
+      "entry": "contracts/PancakeV3PoolDeployer.sol",
+      "optimizer_runs": 400,
+      "evm_version": "istanbul",
+      "metadata_bytecode_hash": "none",
+      "sources": {
+        "contracts/PancakeV3PoolDeployer.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/PancakeV3PoolDeployer.sol",
+          "sha256": "2189a9d27ee5726c9a863b8b0576055bb13356676264638709ffddf7d6077fad"
+        },
+        "contracts/interfaces/IPancakeV3PoolDeployer.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3PoolDeployer.sol",
+          "sha256": "2cdc99e2eb9745537c869d00397aedb970255db43446bd45b1bb3ac28b142645"
+        },
+        "contracts/PancakeV3Pool.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/PancakeV3Pool.sol",
+          "sha256": "674c5cedce8dd511108b8d104d6332113dc1ba9ab6da9b3498b5896e97a33265"
+        },
+        "contracts/interfaces/IPancakeV3Pool.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3Pool.sol",
+          "sha256": "9e6d78a58ddc4b62ecc5e048f50c74daf084b4b035b4073c190864d09dfc05f9"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolImmutables.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolImmutables.sol",
+          "sha256": "6c28e27b8ea34d9adce7fb604e291a9cd454990886293c3c9abb460cec26cd6f"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolState.sol",
+          "sha256": "927132adb0fea744a5f88fefdbca7e1a0f518c58f8cdbb74475fe0f83f863e58"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol",
+          "sha256": "96c66ce5dcbd2c3a3f40c27206012daa0a370d024f6abf2623485737177b4157"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolActions.sol",
+          "sha256": "362a9ee3ca6dbfd3d53129113ddc400f297fe35d1be88fc1ec6ea24da44eb696"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol",
+          "sha256": "3b7226c2813484ee5a67401ebaacae57b5e9a3b6b17d825a3aeda79153dc758f"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolEvents.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolEvents.sol",
+          "sha256": "c9979f9c2678921e77f3cc4484c24438267c2aa0c289c4199a59455899d56930"
+        },
+        "contracts/libraries/LowGasSafeMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/LowGasSafeMath.sol",
+          "sha256": "394107ff2dbbaded5612452af5e77b4af9d0871b096c1514b0ea659b862fc46f"
+        },
+        "contracts/libraries/SafeCast.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/SafeCast.sol",
+          "sha256": "9aed494b56d3dd16b7d6535583ded2cdfb03dc80aaa919347b13d35fd597e8bf"
+        },
+        "contracts/libraries/Tick.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/Tick.sol",
+          "sha256": "d938c31db4532ea087d90c38379ddc0a4ee5709b44a421abf87961e0730d008c"
+        },
+        "contracts/libraries/TickMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/TickMath.sol",
+          "sha256": "e68d3c6c8c847d16c287c1f17f684d11cf0f6267a8d8dc29e81656bccf68f062"
+        },
+        "contracts/libraries/LiquidityMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/LiquidityMath.sol",
+          "sha256": "84d20a16d5346f6ec4c12dff4df23dda5d46e52d33f18aaaaac2e9e36ce4a072"
+        },
+        "contracts/libraries/TickBitmap.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/TickBitmap.sol",
+          "sha256": "8452c484e6caad95411358d8c1763810e715b3d13697c83665657619472d3b0a"
+        },
+        "contracts/libraries/BitMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/BitMath.sol",
+          "sha256": "32f71ea9156f55572a72efb0b2a913df88de66ff33d042043fb3e51a6050a557"
+        },
+        "contracts/libraries/Position.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/Position.sol",
+          "sha256": "d87d5ecd8531d9311e0953462b56ccd6453b65107cc62f43602f59a4edccb806"
+        },
+        "contracts/libraries/FullMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/FullMath.sol",
+          "sha256": "0a18f00afc2b99b3226898303319bf0a9108ace44c8871491571f53de2f0bf0d"
+        },
+        "contracts/libraries/FixedPoint128.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/FixedPoint128.sol",
+          "sha256": "cfc3aef8851f183492547dccc168bf72398fba2aad4c4d9d4784f542a8ccda34"
+        },
+        "contracts/libraries/Oracle.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/Oracle.sol",
+          "sha256": "e77c590445158e991b377da4ce33d42c98d5ac842cdd1ad6cf1c7ba4c541a457"
+        },
+        "contracts/libraries/TransferHelper.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/TransferHelper.sol",
+          "sha256": "ccb87429b290eb6ed429648a7131f68ce0151a74f3ed27de78aacd28015e4590"
+        },
+        "contracts/interfaces/IERC20Minimal.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IERC20Minimal.sol",
+          "sha256": "0c604dff5bacdabd495d87655d920c2ff4331b54b437184a656aefe35ea4d492"
+        },
+        "contracts/libraries/SqrtPriceMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/SqrtPriceMath.sol",
+          "sha256": "36eeb343e0b1809cd76b2ec72a336923aa24f857965966543b065e660b2ebc6e"
+        },
+        "contracts/libraries/UnsafeMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/UnsafeMath.sol",
+          "sha256": "4d02353eb503e3111e25bd50104ac9b279f99e88d848e455262a3fbeb55c50e7"
+        },
+        "contracts/libraries/FixedPoint96.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/FixedPoint96.sol",
+          "sha256": "219deb88ffbcdefa482be35051db586378e8523062bee592dd2c5fa7fb47ebd6"
+        },
+        "contracts/libraries/SwapMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/SwapMath.sol",
+          "sha256": "cdb205f8790e6c8a3587bd3db6eec6fba874afca1c0c6e890d87452f7aadc902"
+        },
+        "contracts/interfaces/IPancakeV3Factory.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3Factory.sol",
+          "sha256": "390685b7ff3fe9d4a0895fc9a420402dd0ce01adb6dc7137c022d68c65a66bdd"
+        },
+        "contracts/interfaces/callback/IPancakeV3MintCallback.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/callback/IPancakeV3MintCallback.sol",
+          "sha256": "a81c1a51b5323002b24d32b9a255df411d66b9f965d92a3aaf7c2aad42439eb8"
+        },
+        "contracts/interfaces/callback/IPancakeV3SwapCallback.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/callback/IPancakeV3SwapCallback.sol",
+          "sha256": "b416735205854ca1d71d92e40426b2986b38ff438387b9ab2554d2e441e64ef6"
+        },
+        "contracts/interfaces/callback/IPancakeV3FlashCallback.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/callback/IPancakeV3FlashCallback.sol",
+          "sha256": "76374f55d3f72a771114166ccff80240cc5f90e96ab1a38fd5179240f6274286"
+        },
+        "@pancakeswap/v3-lm-pool/contracts/interfaces/IPancakeV3LmPool.sol": {
+          "path": "sources/pancake-v3/projects/v3-lm-pool/contracts/interfaces/IPancakeV3LmPool.sol",
+          "sha256": "6a75de888fc355cad5dd2c0b2899c1209fd24c81e54b7ecc96133cf0f40599e4"
+        }
+      },
+      "standard_json_sha256": "f4bcd9ac02b14b3ba1ca9eb7f444c06094f35c4a39bd5bb120f11bc51a637089"
+    },
+    {
+      "name": "PancakeV3Factory",
+      "entry": "contracts/PancakeV3Factory.sol",
+      "optimizer_runs": 1000000,
+      "evm_version": "istanbul",
+      "metadata_bytecode_hash": "none",
+      "sources": {
+        "contracts/PancakeV3Factory.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/PancakeV3Factory.sol",
+          "sha256": "6f4364c4b9761586f7b6eb71bf2344485e12eb01851419da4c1c81ad266d2a00"
+        },
+        "contracts/interfaces/IPancakeV3Factory.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3Factory.sol",
+          "sha256": "390685b7ff3fe9d4a0895fc9a420402dd0ce01adb6dc7137c022d68c65a66bdd"
+        },
+        "contracts/interfaces/IPancakeV3PoolDeployer.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3PoolDeployer.sol",
+          "sha256": "2cdc99e2eb9745537c869d00397aedb970255db43446bd45b1bb3ac28b142645"
+        },
+        "contracts/interfaces/IPancakeV3Pool.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3Pool.sol",
+          "sha256": "9e6d78a58ddc4b62ecc5e048f50c74daf084b4b035b4073c190864d09dfc05f9"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolImmutables.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolImmutables.sol",
+          "sha256": "6c28e27b8ea34d9adce7fb604e291a9cd454990886293c3c9abb460cec26cd6f"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolState.sol",
+          "sha256": "927132adb0fea744a5f88fefdbca7e1a0f518c58f8cdbb74475fe0f83f863e58"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol",
+          "sha256": "96c66ce5dcbd2c3a3f40c27206012daa0a370d024f6abf2623485737177b4157"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolActions.sol",
+          "sha256": "362a9ee3ca6dbfd3d53129113ddc400f297fe35d1be88fc1ec6ea24da44eb696"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol",
+          "sha256": "3b7226c2813484ee5a67401ebaacae57b5e9a3b6b17d825a3aeda79153dc758f"
+        },
+        "contracts/interfaces/pool/IPancakeV3PoolEvents.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolEvents.sol",
+          "sha256": "c9979f9c2678921e77f3cc4484c24438267c2aa0c289c4199a59455899d56930"
+        }
+      },
+      "standard_json_sha256": "3e633274d34a4e1e11c620271c83eafe61ab4d7f9143fc1cf1f0135018399103"
+    },
+    {
+      "name": "SwapRouter",
+      "entry": "contracts/SwapRouter.sol",
+      "optimizer_runs": 1000000,
+      "evm_version": "istanbul",
+      "metadata_bytecode_hash": "none",
+      "sources": {
+        "contracts/SwapRouter.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/SwapRouter.sol",
+          "sha256": "f96d3d9e0ff7e1ce3a936779508c780f220f7547446295cce078539ff4b83ec7"
+        },
+        "@pancakeswap/v3-core/contracts/libraries/SafeCast.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/SafeCast.sol",
+          "sha256": "9aed494b56d3dd16b7d6535583ded2cdfb03dc80aaa919347b13d35fd597e8bf"
+        },
+        "@pancakeswap/v3-core/contracts/libraries/TickMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/TickMath.sol",
+          "sha256": "e68d3c6c8c847d16c287c1f17f684d11cf0f6267a8d8dc29e81656bccf68f062"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/IPancakeV3Pool.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3Pool.sol",
+          "sha256": "9e6d78a58ddc4b62ecc5e048f50c74daf084b4b035b4073c190864d09dfc05f9"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolImmutables.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolImmutables.sol",
+          "sha256": "6c28e27b8ea34d9adce7fb604e291a9cd454990886293c3c9abb460cec26cd6f"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolState.sol",
+          "sha256": "927132adb0fea744a5f88fefdbca7e1a0f518c58f8cdbb74475fe0f83f863e58"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol",
+          "sha256": "96c66ce5dcbd2c3a3f40c27206012daa0a370d024f6abf2623485737177b4157"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolActions.sol",
+          "sha256": "362a9ee3ca6dbfd3d53129113ddc400f297fe35d1be88fc1ec6ea24da44eb696"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol",
+          "sha256": "3b7226c2813484ee5a67401ebaacae57b5e9a3b6b17d825a3aeda79153dc758f"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolEvents.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolEvents.sol",
+          "sha256": "c9979f9c2678921e77f3cc4484c24438267c2aa0c289c4199a59455899d56930"
+        },
+        "contracts/interfaces/ISwapRouter.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/ISwapRouter.sol",
+          "sha256": "516bd03ab29f1cdcb41207f5368c9a0ba73fa2b53545fb01cae2bd91f12956ef"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/callback/IPancakeV3SwapCallback.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/callback/IPancakeV3SwapCallback.sol",
+          "sha256": "b416735205854ca1d71d92e40426b2986b38ff438387b9ab2554d2e441e64ef6"
+        },
+        "contracts/base/PeripheryImmutableState.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PeripheryImmutableState.sol",
+          "sha256": "f4611f54f13d0599648bf88fc5bba7fe8eb3bfc27f898c5cc0e2f27272ebca99"
+        },
+        "contracts/interfaces/IPeripheryImmutableState.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IPeripheryImmutableState.sol",
+          "sha256": "94cc1e5ca66cf6318cdf85843c14b9054eb1fd927384aa094a8b117752e5c9b0"
+        },
+        "contracts/base/PeripheryValidation.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PeripheryValidation.sol",
+          "sha256": "40877c212ebd04f41a3c582bbbf8ad925f31b2a4f7f129352f55777c8fd584a0"
+        },
+        "contracts/base/BlockTimestamp.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/BlockTimestamp.sol",
+          "sha256": "e5ca9a8b6b9e0cafcd9a9966b05228a1572f82fccee396d2e0eff5f8aa9bb1f4"
+        },
+        "contracts/base/PeripheryPaymentsWithFee.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PeripheryPaymentsWithFee.sol",
+          "sha256": "4283f11d5dbd878b594cf4f99a8a0c13720d6dff98ee9bfbb63503391beeefc8"
+        },
+        "@openzeppelin/contracts/token/ERC20/IERC20.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/token/ERC20/IERC20.sol",
+          "sha256": "663bde8def619689c9f219a5774486f1770f3be73411f1fe3ad9071c098c76a4"
+        },
+        "@pancakeswap/v3-core/contracts/libraries/LowGasSafeMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/LowGasSafeMath.sol",
+          "sha256": "394107ff2dbbaded5612452af5e77b4af9d0871b096c1514b0ea659b862fc46f"
+        },
+        "contracts/base/PeripheryPayments.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PeripheryPayments.sol",
+          "sha256": "68cef83e01906a13f4a2bb1c12a9e99fad3e957eea6ddbb54bac30ba3b06a436"
+        },
+        "contracts/interfaces/IPeripheryPayments.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IPeripheryPayments.sol",
+          "sha256": "7dc30ff757e09b7ae754dbe36542c7fe416abf2cbda9042b4bf14e3e3ca4caa9"
+        },
+        "contracts/interfaces/external/IWETH9.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/external/IWETH9.sol",
+          "sha256": "e0394b612c06c730766ab904f7a2a090e2b37ebeee4dd5e922d7213342c6a519"
+        },
+        "contracts/libraries/TransferHelper.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/TransferHelper.sol",
+          "sha256": "7d02f695d41542209c5aa2b18b4041b53412e494491b3c44a361828261c366fd"
+        },
+        "contracts/interfaces/IPeripheryPaymentsWithFee.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IPeripheryPaymentsWithFee.sol",
+          "sha256": "d13973e6bb1982fa9bf397c199bff4e3eef5c67cfa2ff6e0a48a5daee87fbe71"
+        },
+        "contracts/base/Multicall.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/Multicall.sol",
+          "sha256": "029ad0bcade48ff32da51094a3fb245fd7d8324c4fb4dd20fb4b2614efc9618c"
+        },
+        "contracts/interfaces/IMulticall.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IMulticall.sol",
+          "sha256": "fd259a304bdad5fd198ac0279109c6a97198869a2ae72121c7edd66cee91167f"
+        },
+        "contracts/base/SelfPermit.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/SelfPermit.sol",
+          "sha256": "48bb499a5e2bb8063788faf42ba0abd71cbd63392aa4d4c12531b530419d6afa"
+        },
+        "@openzeppelin/contracts/drafts/IERC20Permit.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/drafts/IERC20Permit.sol",
+          "sha256": "ec032179af802dd3efbf4377ab603bf5bdbfe11dbc963a319dbf3c1654f428d7"
+        },
+        "contracts/interfaces/ISelfPermit.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/ISelfPermit.sol",
+          "sha256": "d6d2a3af8ec6afcfceba970371caaf23debbd002faedcc37f96bae44944d2694"
+        },
+        "contracts/interfaces/external/IERC20PermitAllowed.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/external/IERC20PermitAllowed.sol",
+          "sha256": "97a8d607694194b6de26c0a15d9439394748e8157fa38813bc7614f7d2e4ba67"
+        },
+        "contracts/libraries/Path.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/Path.sol",
+          "sha256": "42edaa8b6c577bee7a24b2f1d377fa7fb7649526a935040ccdd1a91a7f3b46a0"
+        },
+        "contracts/libraries/BytesLib.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/BytesLib.sol",
+          "sha256": "abe5da07d5e9f890fc64ca7b9283fa88a81a0909e4510452bdfb470d4d49bddf"
+        },
+        "contracts/libraries/PoolAddress.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/PoolAddress.sol",
+          "sha256": "a729e927ae00735e1806d08ba5925a9c4d948548a32d752440bb549874d847dc"
+        },
+        "contracts/libraries/CallbackValidation.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/CallbackValidation.sol",
+          "sha256": "c555690f8951945669c83eb7b788f1ff46943f2005b0766ff1241477f5236c05"
+        }
+      },
+      "standard_json_sha256": "7a525ba66afa44afa7989a946d1e24a9f732dcfc8f263c743b8f4a09906033b1"
+    },
+    {
+      "name": "NonfungiblePositionManager",
+      "entry": "contracts/NonfungiblePositionManager.sol",
+      "optimizer_runs": 2000,
+      "evm_version": "istanbul",
+      "metadata_bytecode_hash": "none",
+      "sources": {
+        "contracts/NonfungiblePositionManager.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/NonfungiblePositionManager.sol",
+          "sha256": "f49775d339101d0ab836bc68fb283fc87f24ddcb73d9f70a777003b6e82f3e88"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/IPancakeV3Pool.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3Pool.sol",
+          "sha256": "9e6d78a58ddc4b62ecc5e048f50c74daf084b4b035b4073c190864d09dfc05f9"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolImmutables.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolImmutables.sol",
+          "sha256": "6c28e27b8ea34d9adce7fb604e291a9cd454990886293c3c9abb460cec26cd6f"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolState.sol",
+          "sha256": "927132adb0fea744a5f88fefdbca7e1a0f518c58f8cdbb74475fe0f83f863e58"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolDerivedState.sol",
+          "sha256": "96c66ce5dcbd2c3a3f40c27206012daa0a370d024f6abf2623485737177b4157"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolActions.sol",
+          "sha256": "362a9ee3ca6dbfd3d53129113ddc400f297fe35d1be88fc1ec6ea24da44eb696"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolOwnerActions.sol",
+          "sha256": "3b7226c2813484ee5a67401ebaacae57b5e9a3b6b17d825a3aeda79153dc758f"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/pool/IPancakeV3PoolEvents.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/pool/IPancakeV3PoolEvents.sol",
+          "sha256": "c9979f9c2678921e77f3cc4484c24438267c2aa0c289c4199a59455899d56930"
+        },
+        "@pancakeswap/v3-core/contracts/libraries/FixedPoint128.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/FixedPoint128.sol",
+          "sha256": "cfc3aef8851f183492547dccc168bf72398fba2aad4c4d9d4784f542a8ccda34"
+        },
+        "@pancakeswap/v3-core/contracts/libraries/FullMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/FullMath.sol",
+          "sha256": "0a18f00afc2b99b3226898303319bf0a9108ace44c8871491571f53de2f0bf0d"
+        },
+        "contracts/interfaces/INonfungiblePositionManager.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol",
+          "sha256": "4511a8f7c847648973554d371d13e7c17bbead601382336e2cb82ef745f55722"
+        },
+        "@openzeppelin/contracts/token/ERC721/IERC721Metadata.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/token/ERC721/IERC721Metadata.sol",
+          "sha256": "159f540ffea0b0654917b73f81b9a059d5f311b6cf6b25f82f5a188521f35f8c"
+        },
+        "@openzeppelin/contracts/token/ERC721/IERC721.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/token/ERC721/IERC721.sol",
+          "sha256": "5dd6dc634822318f276ef702996b3b9e381e0da1a7c0ad2404e0579f7ff87547"
+        },
+        "@openzeppelin/contracts/introspection/IERC165.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/introspection/IERC165.sol",
+          "sha256": "5d049456c48ad13cbb65120872b419403d2884ab6f3324e35d5aec2bef7f30be"
+        },
+        "@openzeppelin/contracts/token/ERC721/IERC721Enumerable.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/token/ERC721/IERC721Enumerable.sol",
+          "sha256": "85a1261f716ecb647f89f4eb18aeddc47b9ea7314aa8f3e2a97af78488c2ca86"
+        },
+        "contracts/interfaces/IPoolInitializer.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IPoolInitializer.sol",
+          "sha256": "1c6c3661807129156f46ac0e3a8a582a2600cbfe983751b79844981b573ac33a"
+        },
+        "contracts/interfaces/IERC721Permit.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IERC721Permit.sol",
+          "sha256": "d6e1c8868b63e77027761be60b3c7e9724416c4cea8b148889b9066458a144c7"
+        },
+        "contracts/interfaces/IPeripheryPayments.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IPeripheryPayments.sol",
+          "sha256": "7dc30ff757e09b7ae754dbe36542c7fe416abf2cbda9042b4bf14e3e3ca4caa9"
+        },
+        "contracts/interfaces/IPeripheryImmutableState.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IPeripheryImmutableState.sol",
+          "sha256": "94cc1e5ca66cf6318cdf85843c14b9054eb1fd927384aa094a8b117752e5c9b0"
+        },
+        "contracts/libraries/PoolAddress.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/PoolAddress.sol",
+          "sha256": "a729e927ae00735e1806d08ba5925a9c4d948548a32d752440bb549874d847dc"
+        },
+        "contracts/interfaces/INonfungibleTokenPositionDescriptor.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/INonfungibleTokenPositionDescriptor.sol",
+          "sha256": "282347591b4b88962eea1364b5adab3a875bd36484718b446d66b7e236d08ed5"
+        },
+        "contracts/libraries/PositionKey.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/PositionKey.sol",
+          "sha256": "b811728b2a5081639f7186390533821b9407b71a3172d72fa14ed5c19a15c8fc"
+        },
+        "contracts/base/LiquidityManagement.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/LiquidityManagement.sol",
+          "sha256": "ee004c7154a817f4b8899e9ed963351791761bb52c5eed2ee196a6a311382f86"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/IPancakeV3Factory.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/IPancakeV3Factory.sol",
+          "sha256": "390685b7ff3fe9d4a0895fc9a420402dd0ce01adb6dc7137c022d68c65a66bdd"
+        },
+        "@pancakeswap/v3-core/contracts/interfaces/callback/IPancakeV3MintCallback.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/interfaces/callback/IPancakeV3MintCallback.sol",
+          "sha256": "a81c1a51b5323002b24d32b9a255df411d66b9f965d92a3aaf7c2aad42439eb8"
+        },
+        "@pancakeswap/v3-core/contracts/libraries/TickMath.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/TickMath.sol",
+          "sha256": "e68d3c6c8c847d16c287c1f17f684d11cf0f6267a8d8dc29e81656bccf68f062"
+        },
+        "contracts/libraries/CallbackValidation.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/CallbackValidation.sol",
+          "sha256": "c555690f8951945669c83eb7b788f1ff46943f2005b0766ff1241477f5236c05"
+        },
+        "contracts/libraries/LiquidityAmounts.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/LiquidityAmounts.sol",
+          "sha256": "e4f117e062a91aec06bb03188c6f64f4442361b7a8550c2e892674e479074426"
+        },
+        "@pancakeswap/v3-core/contracts/libraries/FixedPoint96.sol": {
+          "path": "sources/pancake-v3/projects/v3-core/contracts/libraries/FixedPoint96.sol",
+          "sha256": "219deb88ffbcdefa482be35051db586378e8523062bee592dd2c5fa7fb47ebd6"
+        },
+        "contracts/base/PeripheryPayments.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PeripheryPayments.sol",
+          "sha256": "68cef83e01906a13f4a2bb1c12a9e99fad3e957eea6ddbb54bac30ba3b06a436"
+        },
+        "@openzeppelin/contracts/token/ERC20/IERC20.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/token/ERC20/IERC20.sol",
+          "sha256": "663bde8def619689c9f219a5774486f1770f3be73411f1fe3ad9071c098c76a4"
+        },
+        "contracts/interfaces/external/IWETH9.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/external/IWETH9.sol",
+          "sha256": "e0394b612c06c730766ab904f7a2a090e2b37ebeee4dd5e922d7213342c6a519"
+        },
+        "contracts/libraries/TransferHelper.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/TransferHelper.sol",
+          "sha256": "7d02f695d41542209c5aa2b18b4041b53412e494491b3c44a361828261c366fd"
+        },
+        "contracts/base/PeripheryImmutableState.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PeripheryImmutableState.sol",
+          "sha256": "f4611f54f13d0599648bf88fc5bba7fe8eb3bfc27f898c5cc0e2f27272ebca99"
+        },
+        "contracts/base/Multicall.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/Multicall.sol",
+          "sha256": "029ad0bcade48ff32da51094a3fb245fd7d8324c4fb4dd20fb4b2614efc9618c"
+        },
+        "contracts/interfaces/IMulticall.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/IMulticall.sol",
+          "sha256": "fd259a304bdad5fd198ac0279109c6a97198869a2ae72121c7edd66cee91167f"
+        },
+        "contracts/base/ERC721Permit.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/ERC721Permit.sol",
+          "sha256": "d917dd488471948d666b4c929f9df7a3b4133db6874de2c8c2a1a2e713c0e984"
+        },
+        "@openzeppelin/contracts/token/ERC721/ERC721.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/token/ERC721/ERC721.sol",
+          "sha256": "3761fa85f5174d12c310e0402496588e27091002fd2d348b43f4bf3397cb1fbc"
+        },
+        "@openzeppelin/contracts/utils/Context.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/utils/Context.sol",
+          "sha256": "9a3d1e5be0f0ace13e2d9aa1d0a1c3a6574983983ad5de94fc412f878bf7fe89"
+        },
+        "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol",
+          "sha256": "5aaa53ad0f0f5b6a9f73b4148e1534de777ad199eb0611d3e4ecad8964bbd8bc"
+        },
+        "@openzeppelin/contracts/introspection/ERC165.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/introspection/ERC165.sol",
+          "sha256": "5dab7b13fa3361b146d34e5997d34de1393d508b69d9d1788ef74334ccb6c348"
+        },
+        "@openzeppelin/contracts/math/SafeMath.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/math/SafeMath.sol",
+          "sha256": "60e99c951790aa056fe6f7f887780fc8a34783859bc420aad188e1abae116fdf"
+        },
+        "@openzeppelin/contracts/utils/Address.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/utils/Address.sol",
+          "sha256": "dfd9d78ab99420ee118a9732e7759e96ce41e6362d1430547e3e36d5c011006d"
+        },
+        "@openzeppelin/contracts/utils/EnumerableSet.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/utils/EnumerableSet.sol",
+          "sha256": "eebcb2f6efbad8c0a81b9b70e7cdb5bf319452cfd81b6a5c64483f06fcae0170"
+        },
+        "@openzeppelin/contracts/utils/EnumerableMap.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/utils/EnumerableMap.sol",
+          "sha256": "a3470f373910a688b6535cfa84a798473b888680c6742d63992ddc47426414e2"
+        },
+        "@openzeppelin/contracts/utils/Strings.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/utils/Strings.sol",
+          "sha256": "344a0d4e57b405ae1d20fb9eae05cd8467f65dbb6ab3072d24d32ea1b4bf2874"
+        },
+        "contracts/libraries/ChainId.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/libraries/ChainId.sol",
+          "sha256": "f6520df5263c8938a53d2a53ee274d959ba63770c6e70c6863a5728a905ad751"
+        },
+        "contracts/interfaces/external/IERC1271.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/external/IERC1271.sol",
+          "sha256": "a08bcd249feaabadb83f09ec60d1bbec8f13d7e2a9717f4ddc40c81c530e7201"
+        },
+        "contracts/base/BlockTimestamp.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/BlockTimestamp.sol",
+          "sha256": "e5ca9a8b6b9e0cafcd9a9966b05228a1572f82fccee396d2e0eff5f8aa9bb1f4"
+        },
+        "contracts/base/PeripheryValidation.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PeripheryValidation.sol",
+          "sha256": "40877c212ebd04f41a3c582bbbf8ad925f31b2a4f7f129352f55777c8fd584a0"
+        },
+        "contracts/base/SelfPermit.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/SelfPermit.sol",
+          "sha256": "48bb499a5e2bb8063788faf42ba0abd71cbd63392aa4d4c12531b530419d6afa"
+        },
+        "@openzeppelin/contracts/drafts/IERC20Permit.sol": {
+          "path": "sources/vendor/@openzeppelin/contracts/drafts/IERC20Permit.sol",
+          "sha256": "ec032179af802dd3efbf4377ab603bf5bdbfe11dbc963a319dbf3c1654f428d7"
+        },
+        "contracts/interfaces/ISelfPermit.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/ISelfPermit.sol",
+          "sha256": "d6d2a3af8ec6afcfceba970371caaf23debbd002faedcc37f96bae44944d2694"
+        },
+        "contracts/interfaces/external/IERC20PermitAllowed.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/interfaces/external/IERC20PermitAllowed.sol",
+          "sha256": "97a8d607694194b6de26c0a15d9439394748e8157fa38813bc7614f7d2e4ba67"
+        },
+        "contracts/base/PoolInitializer.sol": {
+          "path": "sources/pancake-v3/projects/v3-periphery/contracts/base/PoolInitializer.sol",
+          "sha256": "ed0d234b15dab205f874522cc4c76761b584ecdebd89a45cdf1edb3d5e84ab88"
+        }
+      },
+      "standard_json_sha256": "72096c99531ed1a915ec72207ce9fc6f80602a72b40006afa896bc62117a349c"
+    }
+  ],
+  "wrapped_native_dependency": {
+    "type": "unmodified upstream creation-bytecode fixture (not recompiled)",
+    "source_path": "sources/pancake-v3/projects/v3-periphery/test/contracts/WETH9.json",
+    "source_file_sha256": "67f36a6b7174cc41af5e6e2bcf393d5da253c380c8de72becbe8c3173e34c8da",
+    "claim": "Canonical WETH9 test fixture supplied by pinned Pancake V3 source; native deposits are real local transactions, no token storage writes."
+  }
+}
