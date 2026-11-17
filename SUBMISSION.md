@@ -103,6 +103,12 @@ the sale fits faucet BNB. The **current** one is recorded in
 The sale filled 100/100 participants, settled every buyer, and launched with
 `lpTokenId` 41368. `state()` reads `2` (SUCCESS) and `launched()` reads `1`.
 
+Mining was then exercised for real (`deployments/bsc-testnet-v2-mining-demo.json`):
+one bidder bought RDL from the launched pool, staked the 2500 RDL gate,
+redeemed a bot-signed tweet voucher for the 2x boost, and won rounds 124, 125
+and 126. `totalMined()` reads 468.04 RDL, all vesting over 30 days; every
+receipt has `status` 1.
+
 **BscScan cannot verify these contracts.** They are compiled by `fe`, not
 `solc`, and Verify & Publish only accepts Solidity source or
 Solidity standard-json input. Verification here means *reproducible build*:
